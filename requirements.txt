@@ -1,0 +1,5 @@
+# Required npm libraries for the compiler to install and package in the project.
+# Usage: `package-name`=`version` or `package-name` for the latest version.
+typescript
+terser
+tailwind

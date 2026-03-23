@@ -1,0 +1,8 @@
+/build
+/prompts
+/.vscode
+/dist
+/node_modules
+/.ewdk-build*/
+engine/__pycache__/
+*.zip

@@ -1,0 +1,27 @@
+<style>
+    :root {
+        font-family: Inter, system-ui, sans-serif;
+        color: #e2e8f0;
+        background: #000;
+    }
+
+    h1 {
+        font-family: Inter, sans-serif;
+        font-weight: 900;
+    }
+</style>
+
+<template>
+    <div class="flex fixed top-0 left-0 items-center justify-center w-full h-full">
+        <h1 class="text-red-500 text-2xl">HELLOW</h1>
+    </div>
+</template>
+
+<script type="module">
+    import { Modal } from "./functions/Modal.js";
+
+    Modal.showModal(
+        "Yo",
+        "This is a modal dialog. You can put any content here, including HTML elements, text, and more."
+    )
+</script>

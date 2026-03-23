@@ -1,0 +1,15 @@
+<component name="example-card">
+    <style>
+        .example-card { @apply rounded-xl border border-slate-700 bg-slate-900 p-4; }
+        .example-card h2 { @apply mt-0 text-xl font-semibold; }
+    </style>
+
+    <article class="example-card">
+        <h2>Reusable component</h2>
+        <p>Place component-specific markup, styles, and behavior in this file.</p>
+    </article>
+
+    <script>
+        document.currentScript?.closest("component")?.setAttribute("data-ready", "true");
+    </script>
+</component>

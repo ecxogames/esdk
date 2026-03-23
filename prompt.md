@@ -1,0 +1,1 @@
+1. Can you let the user rely on only the python scripts as compiler, remove the main.cpp as it is not needed.
