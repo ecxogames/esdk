@@ -29,36 +29,26 @@ The core of the engine is an Inter-Process Communication (IPC) bridge that route
 ## Build Requirements
 
 To build the prototype, you need:
-- CMake (3.10+)
+- CMake (3.14+)
 - A C++ Compiler (MSVC on Windows, Clang/GCC on macOS/Linux)
 - Python 3 (installed on the system with development headers/libs)
-- Webview Dependencies:
-  - **Windows:** Microsoft Edge WebView2 SDK
-  - **macOS:** WebKit/Cocoa (built-in)
-  - **Linux:** WebKit2GTK
 
 ## Setting Up the Prototype
 
-### 1. Fetch Dependencies
-First, download the required lightweight `webview.h` header:
+### 1. Fetch Dependencies & Configure Environment
+We have provided an automated setup script that downloads the core `webview.h` header, fetches the required Microsoft WebView2 SDK natively via CMake, unconditionally checks for your compiler setup, and configures the `build` directory:
 ```bash
 python scripts/setup_deps.py
 ```
+*(Note: If the script fails to find CMake on Windows, it will safely attempt to download and install it for you).*
 
-### 2. Configure CMake
-Create a build directory and configure the project. (On Windows, ensure you have the WebView2 SDK available, e.g., via vcpkg).
+### 2. Build 
+To compile the C++ engine layer, you just need to invoke the configured build tool:
 ```bash
-mkdir build
-cd build
-cmake ..
+cmake --build build
 ```
 
-### 3. Build & Run
-Compile the application:
-```bash
-cmake --build .
-```
-
+### 3. Run the Application
 Run the executable from the project root (so it can find the `/server` and `/ui` folders):
 ```bash
 # Windows
