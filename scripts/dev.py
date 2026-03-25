@@ -3,6 +3,15 @@ import time
 import subprocess
 import sys
 
+# Import logic from build.py to ensure icons are processed correctly during dev watcher
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+try:
+    from scripts.build import prepare_icon, run_cmake_build
+except ImportError:
+    # Fallback in case package structure changes
+    prepare_icon = lambda: None
+    run_cmake_build = lambda: subprocess.run(['cmake', '--build', 'build'])
+
 # Directories and files to watch for changes
 WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'CMakeLists.txt']
 BUILD_CMD = ['cmake', '--build', 'build']
@@ -41,6 +50,21 @@ def get_latest_mtime():
 def start_app():
     """Builds the project and launches the executable."""
     print("[Dev] Building project...")
+    
+    # Process properties.config changes, icons, and regenerate CMake cache if icon.rc appeared/disappeared
+    try:
+        prepare_icon()
+        # Fast cmake configuration re-run to make sure new icons are caught or deleted icons are ignored
+        cache_file = os.path.join("build", "CMakeCache.txt")
+        if os.path.exists(cache_file):
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+        subprocess.run(['cmake', '-B', 'build'], check=True, stdout=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"[Dev] Warning: Icon preparation failed: {e}")
+
     result = subprocess.run(BUILD_CMD)
     if result.returncode != 0:
         print("[Dev] Build failed. Waiting for changes to try again...")

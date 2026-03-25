@@ -10,8 +10,55 @@ def print_header(title):
     print(f"  {title}")
     print("="*50)
 
+def get_or_convert_icon(props):
+    icon_path = props.get("ICON", "")
+    if not icon_path or not os.path.exists(icon_path):
+        return None
+
+    if icon_path.lower().endswith(".png"):
+        try:
+            from PIL import Image
+            ico_path = os.path.join("engine", "converted_icon.ico")
+            img = Image.open(icon_path)
+            img.save(ico_path, format="ICO", sizes=[(256, 256), (128, 128), (64, 64), (32, 32), (16, 16)])
+            return ico_path
+        except ImportError:
+            print("[Warning] 'Pillow' is required to convert PNG icons to ICO. Run 'pip install Pillow'. Ignoring icon.")
+            return None
+        except Exception as e:
+            print(f"[Warning] Failed to convert PNG to ICO: {e}")
+            return None
+    return icon_path
+
+def prepare_icon():
+    props = parse_properties_config()
+    icon_path = get_or_convert_icon(props)
+    rc_path = os.path.join("engine", "icon.rc")
+    
+    if icon_path and os.path.exists(icon_path):
+        with open(rc_path, "w") as f:
+            # RC compiler needs normalized/escaped paths 
+            abs_icon = os.path.abspath(icon_path).replace("\\", "/")
+            f.write(f'101 ICON "{abs_icon}"\n')
+    else:
+        if os.path.exists(rc_path):
+            try:
+                os.remove(rc_path)
+            except:
+                pass
+
 def run_cmake_build():
     print_header("Compiling C++ Executable")
+    prepare_icon()
+    
+    # Force CMake to re-evaluate whether icon.rc exists by removing the cache.
+    cache_file = os.path.join("build", "CMakeCache.txt")
+    if os.path.exists(cache_file):
+        try:
+            os.remove(cache_file)
+        except OSError:
+            pass
+
     subprocess.run(["cmake", "-B", "build"], check=True)
     subprocess.run(["cmake", "--build", "build", "--config", "Release"], check=True)
 
@@ -51,8 +98,12 @@ def build_standalone():
         shutil.rmtree(dist_dir)
     os.makedirs(dist_dir)
 
+    props = parse_properties_config()
+    app_title = props.get("TITLE", "ESDEngine")
+    safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
+
     print("\n -> Copying executable...")
-    shutil.copy(exe, dist_dir)
+    shutil.copy(exe, os.path.join(dist_dir, safe_exe_name))
     
     print(" -> Copying UI and Server assets...")
     shutil.copytree("ui", os.path.join(dist_dir, "ui"))
@@ -117,14 +168,38 @@ def install_inno_setup_if_needed():
             print(f"\n[Error] Failed to install Inno Setup via winget: {e}")
     return False
 
+def parse_properties_config():
+    props = {
+        "TITLE": "ESD Suite Application",
+        "VERSION": "1.0.0",
+        "AUTHOR": "Ecxo Softwares"
+    }
+    config_path = "properties.config"
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    key, val = line.split("=", 1)
+                    props[key.strip()] = val.strip()
+    return props
+
 def build_installer():
     print_header("INSTALLER BUILD")
     print("Preparing an installation package setup...")
     print("This will create a Standalone build and generate a setup installer script.")
     
+    props = parse_properties_config()
+    app_title = props.get("TITLE", "ESD Suite Application")
+    app_version = props.get("VERSION", "1.0.0")
+    app_publisher = props.get("AUTHOR", "Ecxo Softwares")
+    safe_name = "".join(c for c in app_title if c.isalnum())
+    safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
+    
     dist_dir = os.path.join("dist", "Standalone")
-    if not os.path.exists(dist_dir) or not os.path.exists(os.path.join(dist_dir, "python3.dll")):
-        build_standalone()
+    
+    # Always rebuild so we guarantee the latest properties.config and Icon changes are applied
+    build_standalone()
     
     print("\n -> Generating Inno Setup Installer Script (.iss)...")
 
@@ -138,14 +213,20 @@ def build_installer():
         except Exception as e:
             print(f"    [Error] Failed to download VC++ Redist: {e}")
 
+    icon_prop = get_or_convert_icon(props)
+    setup_icon_line = ""
+    if icon_prop and os.path.exists(icon_prop):
+        setup_icon_line = f"SetupIconFile={os.path.abspath(icon_prop)}\n"
+
     iss_content = f"""
 [Setup]
-AppName=ESD Suite Application
-AppVersion=1.0.0
-DefaultDirName={{autopf}}\\ESDSuiteApp
-DefaultGroupName=ESD Suite
+AppName={app_title}
+AppVersion={app_version}
+AppPublisher={app_publisher}
+{setup_icon_line}DefaultDirName={{autopf}}\\{safe_name}
+DefaultGroupName={app_title}
 OutputDir=dist
-OutputBaseFilename=ESDSuite_Installer
+OutputBaseFilename={safe_name}_Installer
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64
@@ -155,8 +236,8 @@ ArchitecturesInstallIn64BitMode=x64
 Source: "{os.path.abspath(dist_dir)}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{{group}}\\ESD Suite App"; Filename: "{{app}}\\ESDEngine.exe"
-Name: "{{autodesktop}}\\ESD Suite App"; Filename: "{{app}}\\ESDEngine.exe"; Tasks: desktopicon
+Name: "{{group}}\\{app_title}"; Filename: "{{app}}\\{safe_exe_name}"
+Name: "{{autodesktop}}\\{app_title}"; Filename: "{{app}}\\{safe_exe_name}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"

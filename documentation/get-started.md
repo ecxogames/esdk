@@ -9,19 +9,11 @@ The application is built on three core pillars:
 2. **Python (Backend Layer):** Serves as the application's backend logic, scripting engine, and AI integration point.
 3. **JavaScript/HTML/CSS (Frontend Layer):** Powers the user interface, rendering inside the embedded webview.
 
-### The Communication Bridge
-
-The core of the engine is an Inter-Process Communication (IPC) bridge that routes data:
-`JavaScript ↔ C++ ↔ Python`
-
-- **Frontend to Backend:** JS calls an injected global function (`window.invokeBridge`), sending a JSON string. C++ intercepts this and passes it to the embedded Python interpreter.
-- **Backend to Frontend:** Python processes the request and returns a JSON string to C++. C++ then resolves the original JS Promise with this response.
-
 ## Directory Structure
 
 * `/engine/` - Core C++ runtime code (Entry point, window creation, webview integration).
 * `/server/` - Python backend logic. Treated as private during compilation.
-* `/ui/` - User interface code (HTML/CSS/JS entry points and components).
+* `/ui/` - User interface code (HTML/CSS/JS entry points).
 * `/public/` - Shared assets accessible by all layers.
 * `/private/` - Restricted code (C++, JS, Python) accessible only via secure imports.
 * `/scripts/` - Utility scripts for development and building.
@@ -35,27 +27,25 @@ To build the prototype, you need:
 
 ## Setting Up the Prototype
 
-### 1. Fetch Dependencies & Configure Environment
-We have provided an automated setup script that downloads the core `webview.h` header, fetches the required Microsoft WebView2 SDK natively via CMake, unconditionally checks for your compiler setup, and configures the `build` directory:
+### 1. Run Setup
+You have to install all the dependencies, but don't worry, the [`setup.py`](/scripts/setup.py) script does everything for you:
 ```bash
-python scripts/setup_deps.py
+python scripts/setup.py
 ```
-*(Note: If the script fails to find CMake on Windows, it will safely attempt to download and install it for you).*
 
 ### 2. Build 
-To compile the C++ engine layer, you just need to invoke the configured build tool:
+To compile the C++ engine layer, run the [`build.py`](/scripts/build.py) script:
 ```bash
-cmake --build build
+python scripts/build.py
 ```
 
 ### 3. Run the Application
-Run the executable from the project root (so it can find the `/server` and `/ui` folders):
+Start testing the program by running the [`dev.py`](/scripts/dev.py) script, which will launch the application in development mode:
 ```bash
-# Windows
-.\build\Debug\ESDEngine.exe
-
-# macOS/Linux
-./build/ESDEngine
+python scripts/dev.py
 ```
 
-When the window opens, click the button to test the `JS -> C++ -> Python` communication bridge!
+## Next Steps
+Now you are ready to start developing your very own software using the ESD Suite! The application will launch with a simple UI, and you can begin customizing the frontend and backend logic as needed.
+
+For more detailed documentation on how to use the API, integrate AI features, and customize the UI, please refer to the [API Documentation](api-docs.md) in the `documentation` folder of this project or visit the [ESD Engine's Website](https://esde.ecxogames.ca/).

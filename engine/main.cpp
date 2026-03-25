@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
 #include <string>
 #include <cstdlib>
@@ -21,6 +22,7 @@
 #define GetCurrentDir _getcwd
 #include <windows.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #ifndef DWMWA_CAPTION_COLOR
 #define DWMWA_CAPTION_COLOR 35
 #endif
@@ -221,10 +223,32 @@ int main() {
                        "print('Python backend initialized.')");
 
     // 2. Initialize the Webview
-    webview::webview w(true, nullptr);
+    bool devTools = true;
+    if (rootConfig.count("DEVTOOLS") && rootConfig.at("DEVTOOLS") == "false") {
+        devTools = false;
+    }
+
+    webview::webview w(devTools, nullptr);
+    
+    bool contextMenu = true;
+    if (rootConfig.count("DEFAULT_CONTEXTUAL_MENU") && rootConfig.at("DEFAULT_CONTEXTUAL_MENU") == "false") {
+        contextMenu = false;
+    }
+    
+    if (!contextMenu) {
+        w.init("window.addEventListener('contextmenu', e => e.preventDefault());");
+    }
+
     HWND hwnd = nullptr;
 #ifdef _WIN32
     hwnd = (HWND)w.window();
+    
+    // Load embedded icon and set it for the window taskbar/titlebar
+    HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(101));
+    if (hIcon) {
+        SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+        SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+    }
 #endif
 
     bool dragBackground = false;
@@ -232,8 +256,14 @@ int main() {
     // Optional: Load Splash Screen Config
     std::string splashConfigPath = cwd + "/ui/splash/properties.config";
     std::ifstream splashFile(splashConfigPath);
-    bool useSplash = splashFile.good();
-    
+
+    bool userWantsSplash = true;
+    if (rootConfig.count("SPLASH_SCREEN") && rootConfig.at("SPLASH_SCREEN") == "false") {
+        userWantsSplash = false;
+    }
+
+    bool useSplash = splashFile.good() && userWantsSplash;
+
     if (useSplash) {
         auto splashConfig = LoadConfig(splashConfigPath);
         ApplyWindowProperties(w, hwnd, splashConfig, dragBackground);
@@ -302,6 +332,35 @@ int main() {
         }
         return "";
     });
+
+    // Native External Link opener
+    w.bind("openExternalLink", [&](std::string req) -> std::string {
+        std::string url = req;
+        // The payload arrives as a JSON array string: ["https://example.com"]
+        if (url.length() >= 4 && url.front() == '[' && url.back() == ']') {
+            url = url.substr(2, url.length() - 4);
+        }
+#ifdef _WIN32
+        ShellExecuteA(0, "open", url.c_str(), 0, 0, SW_SHOW);
+#endif
+        return "";
+    });
+
+    // Inject Javascript to intercept external links
+    w.init(R"(
+        window.addEventListener('click', function(e) {
+            let target = e.target.closest('a');
+            if (target && target.href) {
+                // Check if it's an external URL (http or https)
+                if (target.href.startsWith('http://') || target.href.startsWith('https://')) {
+                    e.preventDefault();
+                    if (window.openExternalLink) {
+                        window.openExternalLink(target.href);
+                    }
+                }
+            }
+        });
+    )");
 
     if (!hideTerminal) {
         std::cout << "Loading Interface..." << std::endl;
