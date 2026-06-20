@@ -23,7 +23,7 @@
         </div>
         <div class="flex items-center gap-4 md:gap-6">
             <a href="#" class="text-sm md:text-base hover:text-blue-400 transition-colors">Home</a>
-            <a href="documentation/get-started/index.html"
+            <a href="https://docs.ecxo.ca/#/category/esdk" target="_blank" rel="noopener noreferrer"
                 class="text-sm md:text-base hover:text-blue-400 transition-colors">Documentation</a>
             <a href="https://github.com/ecxogames/esdk" target="_blank"
                 class="text-sm md:text-base hover:text-blue-400 transition-colors">GitHub</a>
@@ -39,14 +39,20 @@
                 ESDK is an open-source framework by Ecxo Software that empowers you to create blazing-fast, native
                 desktop applications using HTML, CSS, and modern web technologies powered by a C++ core.
             </p>
-            <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="documentation/get-started/index.html"
-                    class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded transition-colors text-center inline-block">
-                    Get Started
-                </a>
-                <a href="https://ecxogames.ca/" target="_blank"
+            <div class="flex flex-col sm:flex-row gap-4 justify-center items-center sm:items-start">
+                <div class="flex flex-col items-center gap-2">
+                    <a href="https://github.com/ecxogames/esdk/releases" target="_blank" rel="noopener noreferrer"
+                        class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded transition-colors text-center inline-block w-full">
+                        Download
+                    </a>
+                    <a id="latest-release-download" href="https://github.com/ecxogames/esdk/releases/latest"
+                        class="text-xs text-gray-400 hover:text-blue-400 underline underline-offset-2 transition-colors">
+                        Directly download the latest release
+                    </a>
+                </div>
+                <a href="https://docs.ecxo.ca/#/category/esdk" target="_blank" rel="noopener noreferrer"
                     class="px-8 py-3 bg-transparent border border-white hover:bg-white/10 text-white font-semibold rounded transition-colors text-center inline-block">
-                    Learn more about us
+                    Getting Started
                 </a>
             </div>
         </div>
@@ -124,14 +130,42 @@
                 <span class="font-semibold">ESDK</span>
             </div>
             <div class="flex items-center gap-6 text-sm text-gray-400">
-                <span>© 2026 Ecxo Software.</span>
-                <a href="https://ecxogames.ca/" target="_blank" class="hover:text-white transition-colors">More about
+                <span>© Ecxo Interactive</span>
+                <a href="https://ecxo.ca/" target="_blank" class="hover:text-white transition-colors">More about
                     us</a>
-                <a href="documentation/get-started/index.html"
+                <a href="https://docs.ecxo.ca/#/category/esdk" target="_blank" rel="noopener noreferrer"
                     class="hover:text-white transition-colors">Documentation</a>
             </div>
         </div>
     </footer>
+
+    <script>
+        const latestReleaseDownload = document.getElementById("latest-release-download");
+
+        fetch("https://api.github.com/repos/ecxogames/esdk/releases/latest", {
+            headers: { Accept: "application/vnd.github+json" }
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`GitHub API returned ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(release => {
+                const archive = release.assets?.find(asset =>
+                    /^esdk-.+\.zip$/i.test(asset.name) && asset.browser_download_url
+                );
+
+                if (!archive) {
+                    throw new Error("The latest release has no ESDK ZIP archive");
+                }
+
+                latestReleaseDownload.href = archive.browser_download_url;
+            })
+            .catch(() => {
+                latestReleaseDownload.textContent = "View latest release";
+            });
+    </script>
 </body>
 
 </html>
