@@ -5,6 +5,24 @@ import shutil
 import urllib.request
 import zipfile
 import subprocess
+from datetime import datetime
+
+try:
+    from scripts.requirements import (
+        ensure_compatible_interpreter,
+        has_installable_requirements,
+        read_requirements,
+        resolved_python_version,
+        write_pip_requirements,
+    )
+except ImportError:
+    from requirements import (
+        ensure_compatible_interpreter,
+        has_installable_requirements,
+        read_requirements,
+        resolved_python_version,
+        write_pip_requirements,
+    )
 
 def print_header(title):
     print("\n" + "="*50)
@@ -108,10 +126,55 @@ def build_regular():
         shutil.copytree("server", os.path.join(dist_dir, "server"))
         if os.path.exists("properties.config"):
             shutil.copy("properties.config", dist_dir)
+        if os.path.exists("requirements.txt"):
+            shutil.copy("requirements.txt", dist_dir)
     except Exception as e:
         print(f" -> [Warning] Skipping some asset copies: {e}")
 
     print(f"\n[Success] Built locally for testing: {dest_exe}")
+
+def _configure_embedded_python(dist_dir):
+    pth_files = [name for name in os.listdir(dist_dir) if name.startswith("python") and name.endswith("._pth")]
+    if not pth_files:
+        raise RuntimeError("The embedded Python _pth configuration file was not found")
+
+    pth_path = os.path.join(dist_dir, pth_files[0])
+    with open(pth_path, "r", encoding="utf-8") as pth_file:
+        lines = pth_file.read().splitlines()
+
+    lines = ["import site" if line.strip() == "#import site" else line for line in lines]
+    if "Lib\\site-packages" not in lines:
+        lines.append("Lib\\site-packages")
+
+    with open(pth_path, "w", encoding="utf-8") as pth_file:
+        pth_file.write("\n".join(lines) + "\n")
+
+
+def _install_embedded_requirements(dist_dir, pip_lines):
+    if not has_installable_requirements(pip_lines):
+        print(" -> No app Python packages to install.")
+        return
+
+    embedded_python = os.path.abspath(os.path.join(dist_dir, "python.exe"))
+    get_pip_path = os.path.abspath(os.path.join(dist_dir, "get-pip.py"))
+    pip_requirements = None
+    try:
+        print(" -> Bootstrapping pip in the embedded Python runtime...")
+        urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip_path)
+        subprocess.run([embedded_python, get_pip_path, "--no-warn-script-location"], check=True)
+
+        pip_requirements = write_pip_requirements(pip_lines)
+        print(" -> Installing app packages from requirements.txt...")
+        subprocess.run(
+            [embedded_python, "-m", "pip", "install", "--no-warn-script-location", "-r", pip_requirements],
+            check=True,
+        )
+    finally:
+        if os.path.exists(get_pip_path):
+            os.remove(get_pip_path)
+        if pip_requirements and os.path.exists(pip_requirements):
+            os.remove(pip_requirements)
+
 
 def build_standalone():
     print_header("SANDBOX / SELF-SUSTAINED BUILD")
@@ -123,7 +186,7 @@ def build_standalone():
     exe = find_exe()
     if not exe:
         print("[Error] Executable not found after build.")
-        return
+        return False
 
     dist_dir = os.path.join("dist", "Standalone")
     if os.path.exists(dist_dir):
@@ -139,9 +202,14 @@ def build_standalone():
 
     print(" -> Copying Server assets...")
     shutil.copytree("server", os.path.join(dist_dir, "server"))
+    for module_dir in ("public", "private"):
+        if os.path.exists(module_dir):
+            shutil.copytree(module_dir, os.path.join(dist_dir, module_dir))
 
     if os.path.exists("properties.config"):
         shutil.copy("properties.config", dist_dir)
+    if os.path.exists("requirements.txt"):
+        shutil.copy("requirements.txt", dist_dir)
 
     print(" -> Bundling Visual C++ Runtime libraries...")
     # Bundle MSVCP140.dll and VCRUNTIME to prevent "DLL not found" on fresh Windows
@@ -151,9 +219,16 @@ def build_standalone():
         if os.path.exists(dll_path):
             shutil.copy(dll_path, dist_dir)
 
-    print(f" -> Downloading Windows Embeddable Python ({sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})...")
-    # Fetch the exact Python version currently being used to build the engine
-    embed_url = f"https://www.python.org/ftp/python/{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}/python-{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}-embed-amd64.zip"
+    try:
+        python_version = resolved_python_version()
+        ensure_compatible_interpreter(python_version)
+        _, pip_lines = read_requirements()
+    except (ValueError, RuntimeError) as error:
+        print(f"[Error] {error}")
+        return False
+
+    print(f" -> Downloading Windows Embeddable Python ({python_version})...")
+    embed_url = f"https://www.python.org/ftp/python/{python_version}/python-{python_version}-embed-amd64.zip"
     
     zip_path = "python-embed.zip"
     try:
@@ -161,11 +236,17 @@ def build_standalone():
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(dist_dir)
         os.remove(zip_path)
+        _configure_embedded_python(dist_dir)
+        _install_embedded_requirements(dist_dir, pip_lines)
         print(f"\n[Success] Standalone build complete! Location: {os.path.abspath(dist_dir)}")
         print("You can zip this folder and send it to anyone. No installation is required!")
+        return True
     except Exception as e:
         print(f"[Error] Failed to download/extract Python embed: {e}")
         print("Please ensure your Python version has a valid Windows embeddable package on python.org.")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        return False
 
 def find_inno_setup():
     local_appdata = os.environ.get('LOCALAPPDATA', '')
@@ -215,6 +296,36 @@ def parse_properties_config():
                     props[key.strip()] = val.strip()
     return props
 
+
+def _installer_slug(app_title):
+    slug = re.sub(r"[^a-z0-9]+", "-", app_title.lower()).strip("-")
+    return slug or "software"
+
+
+def choose_installer_name(app_title):
+    convention = f"{_installer_slug(app_title)}-{datetime.now().strftime('%Y%m%d')}"
+    print("\nChoose the installer filename:")
+    print(" 1. Installer.exe")
+    print(f" 2. {convention}.exe (Ecxo Software naming convention)")
+    print(" 3. Custom name")
+
+    while True:
+        choice = input("Select filename (1/2/3): ").strip()
+        if choice == "1":
+            return "Installer"
+        if choice == "2":
+            return convention
+        if choice == "3":
+            custom = input("Custom installer name: ").strip()
+            if custom.lower().endswith(".exe"):
+                custom = custom[:-4]
+            custom = re.sub(r'[<>:"/\\|?*]', "-", custom).strip(" .-")
+            if custom:
+                return custom
+            print("The custom name must contain at least one valid filename character.")
+            continue
+        print("Invalid choice. Please enter 1, 2, or 3.")
+
 def build_installer():
     print_header("INSTALLER BUILD")
     print("Preparing an installation package setup...")
@@ -226,11 +337,14 @@ def build_installer():
     app_publisher = props.get("AUTHOR", "Ecxo Softwares")
     safe_name = "".join(c for c in app_title if c.isalnum())
     safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
+    installer_name = choose_installer_name(app_title)
     
     dist_dir = os.path.join("dist", "Standalone")
     
     # Always rebuild so we guarantee the latest properties.config and Icon changes are applied
-    build_standalone()
+    if not build_standalone():
+        print("[Error] Installer build stopped because the standalone build failed.")
+        return
     
     print("\n -> Generating Inno Setup Installer Script (.iss)...")
 
@@ -249,6 +363,7 @@ def build_installer():
     if icon_prop and os.path.exists(icon_prop):
         setup_icon_line = f"SetupIconFile={os.path.abspath(icon_prop)}\n"
 
+    iss_dir = "dist"
     iss_content = f"""
 [Setup]
 AppName={app_title}
@@ -256,8 +371,8 @@ AppVersion={app_version}
 AppPublisher={app_publisher}
 {setup_icon_line}DefaultDirName={{autopf}}\\{safe_name}
 DefaultGroupName={app_title}
-OutputDir=dist
-OutputBaseFilename={safe_name}_Installer
+OutputDir={os.path.abspath(iss_dir)}
+OutputBaseFilename={installer_name}
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64
@@ -276,7 +391,6 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 [Run]
 Filename: "{{app}}\\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."; Flags: waituntilterminated
 """
-    iss_dir = "dist"
     if not os.path.exists(iss_dir):
         os.makedirs(iss_dir)
         
@@ -297,7 +411,7 @@ Filename: "{{app}}\\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"
         print(" -> Compiling installer executable. Please wait...")
         try:
             subprocess.run([iscc_path, iss_path], check=True)
-            installer_exe = os.path.abspath(os.path.join(iss_dir, "ESDSuite_Installer.exe"))
+            installer_exe = os.path.abspath(os.path.join(iss_dir, installer_name + ".exe"))
             print(f"\n[Success] Your installer has been successfully built: {installer_exe}")
         except subprocess.CalledProcessError as e:
             print(f"\n[Error] Failed to compile installer: {e}")

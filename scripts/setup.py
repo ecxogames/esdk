@@ -7,6 +7,28 @@ import tempfile
 import zipfile
 import shutil
 
+try:
+    from scripts.requirements import (
+        ensure_compatible_interpreter,
+        has_installable_requirements,
+        read_requirements,
+        resolved_python_version,
+        write_pip_requirements,
+    )
+except ImportError:
+    from requirements import (
+        ensure_compatible_interpreter,
+        has_installable_requirements,
+        read_requirements,
+        resolved_python_version,
+        write_pip_requirements,
+    )
+
+try:
+    from scripts.docker import ensure_docker_engine
+except ImportError:
+    from docker import ensure_docker_engine
+
 WEBVIEW_HEADER_URL = "https://raw.githubusercontent.com/webview/webview/0.10.0/webview.h"
 WEBVIEW2_NUGET_URL = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2"
 
@@ -15,6 +37,199 @@ TARGET_DIR = os.path.join(BASE_DIR, "engine")
 TARGET_PATH = os.path.join(TARGET_DIR, "webview.h")
 WEBVIEW2_DIR = os.path.join(TARGET_DIR, "webview2")
 BUILD_DIR = os.path.join(BASE_DIR, "build")
+DOCKERFILE_PATH = os.path.join(BASE_DIR, "Dockerfile.esdk")
+DOCKERIGNORE_PATH = os.path.join(BASE_DIR, ".dockerignore")
+
+
+def ask_yes_no(prompt, default=True):
+    suffix = "Y/n" if default else "y/N"
+    while True:
+        answer = input(f"{prompt} ({suffix}): ").strip().lower()
+        if not answer:
+            return default
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+        print("Please enter 'y' or 'n'.")
+
+
+def docker_cli_candidates():
+    candidates = []
+    discovered = shutil.which("docker")
+    if discovered:
+        candidates.append(discovered)
+
+    for base in (
+        os.environ.get("ProgramW6432"),
+        os.environ.get("PROGRAMFILES"),
+        os.environ.get("LOCALAPPDATA"),
+    ):
+        if not base:
+            continue
+        if base == os.environ.get("LOCALAPPDATA"):
+            candidates.append(os.path.join(base, "Docker", "resources", "bin", "docker.exe"))
+        else:
+            candidates.append(os.path.join(base, "Docker", "Docker", "resources", "bin", "docker.exe"))
+    return list(dict.fromkeys(candidates))
+
+
+def find_docker_cli():
+    return next((candidate for candidate in docker_cli_candidates() if os.path.isfile(candidate)), None)
+
+
+def add_directory_to_user_path(directory):
+    directory = os.path.abspath(directory)
+    current_entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    if os.path.normcase(directory) not in {os.path.normcase(entry) for entry in current_entries}:
+        os.environ["PATH"] = directory + os.pathsep + os.environ.get("PATH", "")
+
+    if platform.system() != "Windows":
+        return
+
+    try:
+        import winreg
+
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as environment_key:
+            try:
+                user_path, _ = winreg.QueryValueEx(environment_key, "Path")
+            except FileNotFoundError:
+                user_path = ""
+            user_entries = [entry for entry in user_path.split(os.pathsep) if entry]
+            if os.path.normcase(directory) not in {os.path.normcase(entry) for entry in user_entries}:
+                updated_path = os.pathsep.join(user_entries + [directory])
+                winreg.SetValueEx(environment_key, "Path", 0, winreg.REG_EXPAND_SZ, updated_path)
+                print(f"[+] Added Docker CLI to your user PATH: {directory}")
+    except OSError as error:
+        print(f"[!] Docker was found, but its directory could not be saved to user PATH: {error}")
+
+
+def install_docker_desktop():
+    if platform.system() != "Windows":
+        print("[-] Automatic Docker Desktop installation is currently supported on Windows only.")
+        print("[-] Install Docker for your platform, then run setup again.")
+        return None
+
+    winget = shutil.which("winget")
+    if not winget:
+        print("[-] Windows Package Manager (winget) is required to install Docker Desktop automatically.")
+        return None
+
+    print("[*] Docker Desktop was not found. Requesting administrator permission...")
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        print("[-] PowerShell is required to launch the Docker Desktop installer as administrator.")
+        return None
+
+    escaped_winget = winget.replace("'", "''")
+    install_script = (
+        f"$p = Start-Process -FilePath '{escaped_winget}' "
+        "-ArgumentList @('install','--id','Docker.DockerDesktop','--exact',"
+        "'--accept-package-agreements','--accept-source-agreements') "
+        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    )
+    try:
+        subprocess.run(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", install_script],
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print(f"[-] Docker Desktop installation failed: {error}")
+        return None
+
+    docker_cli = find_docker_cli()
+    if not docker_cli:
+        print("[!] Docker Desktop finished installing, but docker.exe was not found yet.")
+        print("[!] Restart Windows if the installer requested it, then run setup again.")
+        return None
+    print("[+] Docker Desktop installed successfully.")
+    return docker_cli
+
+
+def ensure_docker_available():
+    docker_cli = find_docker_cli() or install_docker_desktop()
+    if not docker_cli:
+        return None
+
+    add_directory_to_user_path(os.path.dirname(docker_cli))
+    return docker_cli
+
+
+def configure_docker():
+    if not ask_yes_no("[?] Set up disposable Docker app tests?", default=False):
+        print("[*] Docker development setup skipped.")
+        return False
+
+    python_version = resolved_python_version()
+    dockerfile = f'''ARG PYTHON_VERSION={python_version}
+FROM python:${{PYTHON_VERSION}}-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends build-essential tk \\
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/esdk-requirements.txt
+RUN sed -E '/^[[:space:]]*python[[:space:]]*==/Id' /tmp/esdk-requirements.txt > /tmp/pip-requirements.txt \\
+    && if [ -s /tmp/pip-requirements.txt ]; then pip install --no-cache-dir -r /tmp/pip-requirements.txt; fi
+
+COPY . .
+CMD ["python", "scripts/docker.py", "--inside-container"]
+'''
+    dockerignore = '''.git
+.vscode
+build
+dist
+__pycache__
+*.pyc
+*.zip
+Dockerfile*
+'''
+    with open(DOCKERFILE_PATH, "w", encoding="utf-8", newline="\n") as docker_file:
+        docker_file.write(dockerfile)
+    with open(DOCKERIGNORE_PATH, "w", encoding="utf-8", newline="\n") as ignore_file:
+        ignore_file.write(dockerignore)
+
+    print("[+] Docker test environment created.")
+    docker_cli = ensure_docker_available()
+    if docker_cli:
+        if ensure_docker_engine(docker_cli):
+            print("[+] Docker is installed, on PATH, and its engine is ready.")
+            print("[+] Run: python scripts/dev.py, then choose Docker.")
+        else:
+            print("[!] Docker installed successfully, but its engine is not ready yet.")
+            print("[!] Complete any instructions shown by Docker Desktop, then rerun setup.")
+    else:
+        print("[!] Docker setup could not be completed automatically.")
+    return True
+
+
+def install_python_requirements():
+    try:
+        python_version = resolved_python_version()
+        ensure_compatible_interpreter(python_version)
+        _, pip_lines = read_requirements()
+    except (ValueError, RuntimeError) as error:
+        print(f"[-] {error}")
+        sys.exit(1)
+
+    if not has_installable_requirements(pip_lines):
+        print("[*] No Python packages listed in requirements.txt.")
+        return
+
+    requirements_path = write_pip_requirements(pip_lines)
+    try:
+        print("[*] Installing Python packages from requirements.txt...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-r", requirements_path], check=True)
+        print("[+] Python packages installed successfully.")
+    except subprocess.CalledProcessError as error:
+        print(f"[-] Failed to install Python requirements: {error}")
+        sys.exit(1)
+    finally:
+        if os.path.exists(requirements_path):
+            os.remove(requirements_path)
 
 def download_webview():
     print(f"[*] Downloading webview.h from {WEBVIEW_HEADER_URL}...")
@@ -119,10 +334,16 @@ def print_instructions():
         print("   .\\build\\Debug\\ESDEngine.exe")
     else:
         print("   ./build/ESDEngine")
+    if os.path.exists(DOCKERFILE_PATH):
+        print("\n3. Run backend tests in a brand-new container:")
+        print("   python scripts/dev.py")
+        print("   Then answer yes when asked to use Docker.")
     print("\n" + "="*55 + "\n")
 
 if __name__ == "__main__":
     print("Starting ESD Suite Environment Setup...\n")
+    configure_docker()
+    install_python_requirements()
     download_webview()
     download_webview2_headers()
     configure_cmake()

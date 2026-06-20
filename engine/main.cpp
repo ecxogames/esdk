@@ -5,6 +5,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 
 // Workaround to prevent MSVC from searching for the Python debug library (pythonXX_d.lib)
@@ -382,6 +383,17 @@ int main() {
     std::string cwd = GetCurrentWorkingDir();
     auto rootConfig = LoadConfig(cwd + "/properties.config");
     bool isFullscreen = (rootConfig.count("FULLSCREEN") && rootConfig.at("FULLSCREEN") == "true");
+    int appPort = 2024;
+    if (rootConfig.count("APP_PORT")) {
+        try {
+            int configuredPort = std::stoi(rootConfig.at("APP_PORT"));
+            if (configuredPort < 1 || configuredPort > 65535) throw std::out_of_range("port");
+            appPort = configuredPort;
+        } catch (...) {
+            std::cerr << "Invalid APP_PORT in properties.config; using 2024." << std::endl;
+        }
+    }
+    const std::string appPortString = std::to_string(appPort);
     
     // Check if terminal should be hidden
     bool hideTerminal = (rootConfig.count("SHOW_TERMINAL") && rootConfig["SHOW_TERMINAL"] == "false");
@@ -414,7 +426,7 @@ int main() {
 
     PyRun_SimpleString(("import sys\nsys.path.insert(0, '" + pyCwd + "')\nprint('Python backend initialized.')").c_str());
 
-    // Start local file server on port 2024 to serve project files to the webview.
+    // Start the configurable local file server to serve project files to the webview.
     // Uses the C++ computed project root so it works correctly from any working directory.
     // Runs as a daemon thread so it exits automatically when the main process exits.
     {
@@ -431,7 +443,7 @@ int main() {
             "    def log_message(self, fmt, *a): pass\n"
             "def _run_server():\n"
             "    try:\n"
-            "        srv = http.server.HTTPServer(('127.0.0.1', 2024), _ESDHandler)\n"
+            "        srv = http.server.HTTPServer(('127.0.0.1', " + appPortString + "), _ESDHandler)\n"
             "        srv.serve_forever()\n"
             "    except OSError:\n"
             "        pass\n"
@@ -439,7 +451,7 @@ int main() {
             "# Block until port is accepting connections (max ~5 s)\n"
             "for _ in range(50):\n"
             "    try:\n"
-            "        _c = socket.create_connection(('127.0.0.1', 2024), timeout=0.1)\n"
+            "        _c = socket.create_connection(('127.0.0.1', " + appPortString + "), timeout=0.1)\n"
             "        _c.close(); break\n"
             "    except OSError:\n"
             "        time.sleep(0.1)\n";
@@ -493,24 +505,43 @@ int main() {
 
     bool useSplash = splashFile.good() && userWantsSplash;
 
+    // Register the splash bridge before the first navigation. Registering it
+    // after loading splash.html creates a race where the page can finish its
+    // timer before WebView2 has exposed transitionToMain, leaving the splash
+    // visible indefinitely.
+    w.bind("transitionToMain", [&](std::string req) -> std::string {
+        ApplyWindowProperties(w, hwnd, rootConfig, dragBackground);
+#ifdef ESD_EMBED_HTML
+        std::string mainHtml = GetPageHtml(mainPageFile);
+        if (!mainHtml.empty()) { w.set_html(mainHtml); }
+        else { w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile); }
+#else
+        w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile);
+#endif
+#ifdef _WIN32
+        if (isFullscreen) ApplyFullscreen(w, hwnd);
+#endif
+        return "";
+    });
+
     if (useSplash) {
         auto splashConfig = LoadConfig(splashConfigPath);
         ApplyWindowProperties(w, hwnd, splashConfig, dragBackground);
 #ifdef ESD_EMBED_HTML
         std::string splashHtml = GetPageHtml("ui/splash/splash.html");
         if (!splashHtml.empty()) { w.set_html(splashHtml); }
-        else { w.navigate("http://127.0.0.1:2024/ui/splash/splash.html?v=" + std::to_string(std::time(nullptr))); }
+        else { w.navigate("http://127.0.0.1:" + appPortString + "/ui/splash/splash.html?v=" + std::to_string(std::time(nullptr))); }
 #else
-        w.navigate("http://127.0.0.1:2024/ui/splash/splash.html?v=" + std::to_string(std::time(nullptr)));
+        w.navigate("http://127.0.0.1:" + appPortString + "/ui/splash/splash.html?v=" + std::to_string(std::time(nullptr)));
 #endif
     } else {
         ApplyWindowProperties(w, hwnd, rootConfig, dragBackground);
 #ifdef ESD_EMBED_HTML
         std::string mainHtml = GetPageHtml(mainPageFile);
         if (!mainHtml.empty()) { w.set_html(mainHtml); }
-        else { w.navigate("http://127.0.0.1:2024/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr))); }
+        else { w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr))); }
 #else
-        w.navigate("http://127.0.0.1:2024/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr)));
+        w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr)));
 #endif
 #ifdef _WIN32
         if (isFullscreen) ApplyFullscreen(w, hwnd);
@@ -558,22 +589,6 @@ int main() {
         std::string pyRes = CallPythonBackend(payload);
         PyGILState_Release(gstate);
         return pyRes;
-    });
-
-    // Binding for splash screen to trigger transition
-    w.bind("transitionToMain", [&](std::string req) -> std::string {
-        ApplyWindowProperties(w, hwnd, rootConfig, dragBackground);
-#ifdef ESD_EMBED_HTML
-        std::string mainHtml = GetPageHtml(mainPageFile);
-        if (!mainHtml.empty()) { w.set_html(mainHtml); }
-        else { w.navigate("http://127.0.0.1:2024/" + mainPageFile); }
-#else
-        w.navigate("http://127.0.0.1:2024/" + mainPageFile);
-#endif
-#ifdef _WIN32
-        if (isFullscreen) ApplyFullscreen(w, hwnd);
-#endif
-        return "";
     });
 
     // Window control bindings — usable from any custom titlebar or button
