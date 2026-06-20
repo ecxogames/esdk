@@ -121,12 +121,18 @@
         }
         draw();
 
-        // Wait 3 seconds then seamlessly instruct C++ to transition to main app
+        // Wait 3 seconds, then transition as soon as the native bridge is ready.
+        // The retry also protects against slower WebView initialization.
         window.addEventListener('load', () => {
             setTimeout(() => {
-                if (window.transitionToMain) {
-                    window.transitionToMain("");
-                }
+                const transitionWhenReady = () => {
+                    if (typeof window.transitionToMain === 'function') {
+                        window.transitionToMain("");
+                        return;
+                    }
+                    setTimeout(transitionWhenReady, 50);
+                };
+                transitionWhenReady();
             }, 3000);
         });
     </script>

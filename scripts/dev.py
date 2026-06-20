@@ -10,8 +10,25 @@ try:
 except ImportError:
     prepare_icon = lambda: None
 
-WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'CMakeLists.txt']
+try:
+    from scripts import docker
+except ImportError:
+    import docker
+
+WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'requirements.txt', 'CMakeLists.txt']
 BUILD_DIR = 'build'
+
+def get_server_port():
+    try:
+        with open('properties.config', 'r', encoding='utf-8') as config:
+            for line in config:
+                if line.strip().startswith('APP_PORT='):
+                    port = int(line.split('=', 1)[1].strip())
+                    if 1 <= port <= 65535:
+                        return port
+    except (OSError, ValueError):
+        pass
+    return 2024
 
 def get_exe_path():
     bases = [
@@ -71,27 +88,26 @@ def build_project():
     result = subprocess.run(['cmake', '--build', BUILD_DIR])
     return result.returncode == 0
 
-SERVER_PORT = 2024
-
 def free_port():
-    """Kill any process currently bound to SERVER_PORT so the new server can bind cleanly."""
+    """Kill any process currently bound to APP_PORT so the new server can bind cleanly."""
     import socket
+    server_port = get_server_port()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(('127.0.0.1', SERVER_PORT)) != 0:
+        if s.connect_ex(('127.0.0.1', server_port)) != 0:
             return  # port already free
     try:
         result = subprocess.run(['netstat', '-ano'], capture_output=True, text=True)
         for line in result.stdout.splitlines():
-            if f':{SERVER_PORT}' in line and 'LISTENING' in line:
+            if f':{server_port}' in line and 'LISTENING' in line:
                 parts = line.split()
                 pid = parts[-1]
                 if pid.isdigit() and pid != '0':
                     subprocess.run(['taskkill', '/F', '/PID', pid], capture_output=True)
-                    print(f"[Dev] Released port {SERVER_PORT} (killed PID {pid})")
+                    print(f"[Dev] Released port {server_port} (killed PID {pid})")
                     time.sleep(0.3)
                     break
     except Exception as e:
-        print(f"[Dev] Warning: could not release port {SERVER_PORT}: {e}")
+        print(f"[Dev] Warning: could not release port {server_port}: {e}")
 
 def clear_webview_cache():
     """Delete WebView2's persistent disk cache so every launch loads fresh content."""
@@ -137,7 +153,7 @@ def ask_startup_choice():
     print("\n" + "=" * 50)
     print("  ESD Suite - Dev Server")
     print("=" * 50)
-    print("\n  [1] Fresh build   — clears the build dir and compiles from scratch")
+    print("\n  [1] Fresh build   — validates in a new container, then compiles from scratch")
     print("  [2] Previous build — launches the last compiled binary immediately")
     print()
     while True:
@@ -145,6 +161,7 @@ def ask_startup_choice():
         if choice in ('1', '2'):
             return choice
         print("  Please enter 1 or 2.")
+
 
 def main():
     choice = ask_startup_choice()
@@ -157,8 +174,14 @@ def main():
             app_process = subprocess.Popen([exe])
         else:
             print("[Dev] No previous build found — running a fresh build instead.")
+            if docker.main() != 0:
+                print("[Dev] Docker container setup failed; the fresh build was cancelled.")
+                return 1
             app_process = start_app(fresh=True)
     else:
+        if docker.main() != 0:
+            print("[Dev] Docker container setup failed; the fresh build was cancelled.")
+            return 1
         app_process = start_app(fresh=True)
 
     last_mtime = get_latest_mtime()
@@ -183,7 +206,9 @@ def main():
         if app_process and app_process.poll() is None:
             app_process.terminate()
             app_process.wait()
-        sys.exit(0)
+        return 0
+
+    return 0
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

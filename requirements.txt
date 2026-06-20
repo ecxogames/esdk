@@ -1,0 +1,5 @@
+# ESDK runtime directive. Use a full version available from python.org.
+python==3.11.9
+
+# Add normal pip requirements below, one per line. For example:
+# requests==2.32.4
