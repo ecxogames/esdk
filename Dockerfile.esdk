@@ -1,0 +1,16 @@
+ARG PYTHON_VERSION=3.11.9
+FROM python:${PYTHON_VERSION}-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential tk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/esdk-requirements.txt
+RUN sed -E '/^[[:space:]]*python[[:space:]]*==/Id' /tmp/esdk-requirements.txt > /tmp/pip-requirements.txt \
+    && if [ -s /tmp/pip-requirements.txt ]; then pip install --no-cache-dir -r /tmp/pip-requirements.txt; fi
+
+COPY . .
+CMD ["python", "scripts/docker.py", "--inside-container"]

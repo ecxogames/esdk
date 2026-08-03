@@ -500,6 +500,7 @@
             <span class="titlebar-label">ESD Suite</span>
         </div>
 
+
         <div class="titlebar-center">
             <button class="tb-modal-btn" onclick="demoAlert()" title="Open alert modal">
                 <span class="tb-dot tb-dot-alert"></span>Alert
@@ -698,6 +699,8 @@
                     </table>
                 </div>
             </div>
+
+            <button onclick="request_example_message()">Test Example feature</button>
 
             <!-- Interactive Bridge Demo -->
             <div>
@@ -913,6 +916,12 @@
         function callModalError()   { _callModal('modal_error'); }
         function callModalConfirm() { _callModal('modal_confirm'); }
         function callModalPrompt()  { _callModal('modal_prompt', { default: document.getElementById('modal-default').value }); }
+        function request_example_message() {
+            if (!window.invokeBridge) { setRes('res-modals', 'Error: bridge not found.', true); return; }
+            window.invokeBridge({ action: 'example_test_action' })
+                .then(r => setRes('res-modals', '[example_test_action] ' + (r.result || r.reason || JSON.stringify(r)), r.status !== 'ok'))
+                .catch(e => setRes('res-modals', 'Bridge error: ' + e, true));
+        }
     </script>
 
 </body>

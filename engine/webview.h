@@ -2208,8 +2208,12 @@ public:
       });
       RegisterClassExW(&wc);
 
-      CreateWindowW(L"webview", L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                    CW_USEDEFAULT, 0, 0, nullptr, nullptr, hInstance, this);
+      // Initialize the native/WebView2 compositor off-screen. ESDK will hide
+      // this HWND, apply its final style and centered bounds, navigate, and
+      // reveal it when ready. This avoids both the CW_USEDEFAULT top-left flash
+      // and WebView2's blank surface when initialized under a never-shown HWND.
+      CreateWindowW(L"webview", L"", WS_OVERLAPPEDWINDOW, -32000, -32000,
+                    0, 0, nullptr, nullptr, hInstance, this);
       if (m_window == nullptr) {
         return;
       }
@@ -2223,9 +2227,8 @@ public:
       m_dpi = get_window_dpi(m_window);
     }
 
-    ShowWindow(m_window, SW_SHOW);
+    ShowWindow(m_window, SW_SHOWNA);
     UpdateWindow(m_window);
-    SetFocus(m_window);
 
     auto cb =
         std::bind(&win32_edge_engine::on_message, this, std::placeholders::_1);

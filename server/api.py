@@ -1,4 +1,11 @@
+# API handler for the python backend
+# This file is responsible for making all the methods from the public and private folders as well as some custom listeners available to the frontend via the calls
+# To make a call from the frontend, use the following format:
+#   window.api.send("action_name", {data: "some_data"})
+
 import json
+import tkinter
+from tkinter import messagebox
 
 # Import your submodules logically
 from public import utils
@@ -47,6 +54,11 @@ def handle_message(message_str):
         elif action == "modal_prompt":
             value = modals.show_prompt(req.get("title", "Input"), req.get("message", ""), req.get("default", ""))
             return json.dumps({"status": "ok", "result": value})
+
+        elif action == "example_test_action":
+            messagebox.showinfo("Test Action", "This is a test action from the API handler.")
+            return json.dumps({"status": "ok", "result": "Test action executed successfully."})
+            
 
         return json.dumps({"status": "error", "reason": "Unknown action"})
     except Exception as e:

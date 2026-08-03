@@ -15,6 +15,18 @@ DOCKERFILE = os.path.join(BASE_DIR, "Dockerfile.esdk")
 IMAGE_NAME = "esdk-app-test"
 
 
+def silent_process_options():
+    """Hide Docker CLI/Desktop process windows while retaining captured output."""
+    options = {}
+    if sys.platform == "win32":
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        options["startupinfo"] = startupinfo
+    return options
+
+
 def run_with_progress(command, label, cwd):
     """Run a Docker command behind a compact, indeterminate progress bar."""
     started_at = time.monotonic()
@@ -28,6 +40,7 @@ def run_with_progress(command, label, cwd):
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 text=True,
+                **silent_process_options(),
             )
         except OSError as error:
             print(f"[Error] {label} could not be started: {error}")
@@ -106,6 +119,7 @@ def docker_engine_is_ready(docker_cli):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            **silent_process_options(),
         )
         return result.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -121,26 +135,38 @@ def ensure_docker_engine(docker_cli, timeout_seconds=180):
         print("[Error] The Docker engine is not running. Start it and try again.")
         return False
 
-    desktop_executable = find_docker_desktop_executable()
-    if not desktop_executable:
-        print("[Error] Docker Desktop is installed, but Docker Desktop.exe could not be found.")
-        print("[Error] Repair Docker Desktop or rerun: python scripts/setup.py")
-        return False
-
     print("[Docker] Docker engine is stopped. Starting Docker Desktop...")
     try:
-        creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-        )
-        subprocess.Popen(
-            [desktop_executable],
+        # The supported Desktop CLI starts the backend without opening the
+        # Dashboard. Older installations fall back to the autostart path.
+        desktop_start = subprocess.run(
+            [docker_cli, "desktop", "start", "--detach"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=creation_flags,
+            timeout=20,
+            **silent_process_options(),
         )
-    except OSError as error:
+        if desktop_start.returncode != 0:
+            desktop_executable = find_docker_desktop_executable()
+            if not desktop_executable:
+                print("[Error] Docker Desktop is installed, but its startup command could not be found.")
+                return False
+            fallback_options = silent_process_options()
+            fallback_options["creationflags"] = (
+                fallback_options.get("creationflags", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            )
+            subprocess.Popen(
+                [desktop_executable, "-Autostart"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                **fallback_options,
+            )
+    except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[Error] Docker Desktop could not be started: {error}")
         return False
 

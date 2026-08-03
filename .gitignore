@@ -11,3 +11,4 @@
 /server/__pycache__
 /server/__pycache__
 *.zip
+*__pycache__
