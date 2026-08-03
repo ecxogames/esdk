@@ -125,13 +125,23 @@ def install_docker_desktop():
     install_script = (
         f"$p = Start-Process -FilePath '{escaped_winget}' "
         "-ArgumentList @('install','--id','Docker.DockerDesktop','--exact',"
-        "'--accept-package-agreements','--accept-source-agreements') "
-        "-Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+        "'--silent','--accept-package-agreements','--accept-source-agreements') "
+        "-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode"
     )
     try:
+        hidden_process = {}
+        if platform.system() == "Windows":
+            hidden_process["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.run(
-            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", install_script],
+            [
+                powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+                "-Command", install_script,
+            ],
             check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **hidden_process,
         )
     except subprocess.CalledProcessError as error:
         print(f"[-] Docker Desktop installation failed: {error}")

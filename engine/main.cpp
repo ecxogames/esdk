@@ -110,11 +110,12 @@ static DWORD WINAPI ModalWindowThread(LPVOID param) {
         HWND mhwnd = static_cast<HWND>(modal.window());
 
 #ifdef _WIN32
+        ShowWindow(mhwnd, SW_HIDE);
         if (!p->useOsChrome) {
             // Frameless popup — strip all OS window chrome
             LONG_PTR style = GetWindowLongPtr(mhwnd, GWL_STYLE);
             style = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX))
-                  | WS_POPUP | WS_VISIBLE;
+                  | WS_POPUP;
             SetWindowLongPtr(mhwnd, GWL_STYLE, style);
             SetWindowPos(mhwnd, nullptr, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -146,13 +147,18 @@ static DWORD WINAPI ModalWindowThread(LPVOID param) {
             GetWindowRect(mhwnd, &wr);
             int aw = wr.right - wr.left;
             int ah = wr.bottom - wr.top;
-            HMONITOR hMon = MonitorFromWindow(mhwnd, MONITOR_DEFAULTTONEAREST);
+            HWND parentHwnd = p->parentWv
+                ? static_cast<HWND>(p->parentWv->window())
+                : nullptr;
+            HMONITOR hMon = MonitorFromWindow(
+                parentHwnd ? parentHwnd : mhwnd,
+                MONITOR_DEFAULTTONEAREST);
             MONITORINFO mi = { sizeof(mi) };
             if (GetMonitorInfo(hMon, &mi)) {
                 int x = mi.rcWork.left + (mi.rcWork.right  - mi.rcWork.left - aw) / 2;
                 int y = mi.rcWork.top  + (mi.rcWork.bottom - mi.rcWork.top  - ah) / 2;
                 SetWindowPos(mhwnd, HWND_TOP, x, y, 0, 0,
-                             SWP_NOSIZE | SWP_SHOWWINDOW);
+                             SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
 
@@ -187,6 +193,44 @@ static DWORD WINAPI ModalWindowThread(LPVOID param) {
 #endif
             return "";
         });
+
+        // Reveal the modal only after its document is ready. The native HWND
+        // remains hidden while its final style, size, position, and content
+        // are prepared, preventing the default-position startup flash.
+        bool modalWaitingToShow = true;
+        modal.bind("__esdModalWindowReady", [mhwnd, &modalWaitingToShow](std::string) -> std::string {
+#ifdef _WIN32
+            if (mhwnd && modalWaitingToShow) {
+                modalWaitingToShow = false;
+                ShowWindow(mhwnd, SW_SHOWNORMAL);
+                SetWindowPos(mhwnd, nullptr, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                             SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                RECT client{};
+                if (GetClientRect(mhwnd, &client)) {
+                    SendMessage(mhwnd, WM_SIZE, SIZE_RESTORED,
+                                MAKELPARAM(client.right - client.left,
+                                          client.bottom - client.top));
+                }
+                RedrawWindow(mhwnd, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN |
+                             RDW_UPDATENOW);
+                UpdateWindow(mhwnd);
+                SetForegroundWindow(mhwnd);
+                SetFocus(mhwnd);
+            }
+#endif
+            return "";
+        });
+        modal.init(
+            "(function(){"
+            "function ready(){setTimeout(function(){"
+            "if(window.__esdModalWindowReady)window.__esdModalWindowReady('');"
+            "},0);}"
+            "if(document.readyState==='loading')"
+            "window.addEventListener('DOMContentLoaded',ready,{once:true});"
+            "else ready();"
+            "})();");
 
         modal.set_html(p->generatedHtml);
         modal.run();
@@ -278,6 +322,78 @@ std::string CallPythonBackend(const std::string& message) {
     return resultStr;
 }
 
+#ifdef _WIN32
+struct NativeWindowState {
+    WNDPROC originalProc = nullptr;
+    int cornerRadius = 0;
+    bool frameless = false;
+};
+
+static NativeWindowState g_nativeWindowState;
+
+static void UpdateRoundedWindowRegion(HWND hwnd, bool maximized) {
+    if (!hwnd) return;
+    if (!g_nativeWindowState.frameless ||
+        g_nativeWindowState.cornerRadius <= 0 ||
+        maximized) {
+        SetWindowRgn(hwnd, nullptr, TRUE);
+        return;
+    }
+
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect)) return;
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    const int radius = g_nativeWindowState.cornerRadius;
+    HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+    if (region && !SetWindowRgn(hwnd, region, TRUE)) {
+        DeleteObject(region);
+    }
+}
+
+static LRESULT CALLBACK EsdkWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    WNDPROC original = g_nativeWindowState.originalProc;
+    LRESULT result = CallWindowProc(original, hwnd, message, wParam, lParam);
+
+    if (message == WM_SIZE && g_nativeWindowState.frameless) {
+        if (wParam == SIZE_MAXIMIZED) {
+            UpdateRoundedWindowRegion(hwnd, true);
+        } else if (wParam == SIZE_RESTORED) {
+            UpdateRoundedWindowRegion(hwnd, false);
+        }
+    } else if (message == WM_DPICHANGED && g_nativeWindowState.frameless) {
+        UpdateRoundedWindowRegion(hwnd, IsZoomed(hwnd) != FALSE);
+    }
+    return result;
+}
+
+static void InstallEsdkWindowProcedure(HWND hwnd) {
+    if (!hwnd || g_nativeWindowState.originalProc) return;
+    g_nativeWindowState.originalProc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(EsdkWindowProc)));
+}
+
+static void ShowPreparedWindow(HWND hwnd) {
+    if (!hwnd) return;
+    ShowWindow(hwnd, SW_SHOW);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    RECT client{};
+    if (GetClientRect(hwnd, &client)) {
+        SendMessage(hwnd, WM_SIZE, IsZoomed(hwnd) ? SIZE_MAXIMIZED : SIZE_RESTORED,
+                    MAKELPARAM(client.right - client.left,
+                              client.bottom - client.top));
+    }
+    RedrawWindow(hwnd, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    UpdateWindow(hwnd);
+    DwmFlush();
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+}
+#endif
+
 // Applies window properties dynamically to the window handle
 void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_map<std::string, std::string>& config, bool& dragBackgroundOut) {
     std::string title = config.count("TITLE") ? config.at("TITLE") : "ESD Suite Framework";
@@ -323,35 +439,39 @@ void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_
     if (!canMinimize) style &= ~WS_MINIMIZEBOX; else style |= WS_MINIMIZEBOX;
     if (!canMaximize) style &= ~WS_MAXIMIZEBOX; else style |= WS_MAXIMIZEBOX;
     if (!showTitlebar) {
-        style &= ~(WS_CAPTION | WS_THICKFRAME);
+        style &= ~WS_CAPTION;
+        // Keep the native sizing frame when maximizing is allowed. It is
+        // visually frameless without WS_CAPTION, but Windows retains correct
+        // maximize, restore, snap, work-area, and minimum-size behavior.
+        if (canMaximize) style |= WS_THICKFRAME;
+        else style &= ~WS_THICKFRAME;
     } else {
         style |= (WS_CAPTION | WS_THICKFRAME);
     }
     SetWindowLongPtr(hwnd, GWL_STYLE, style);
+
+    g_nativeWindowState.frameless = !showTitlebar;
+    g_nativeWindowState.cornerRadius = cornerRadius;
     
     // Center the window on the screen and force it to redraw its frame
     HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(mi) };
     if (GetMonitorInfo(hMonitor, &mi)) {
+        RECT windowRect{};
+        GetWindowRect(hwnd, &windowRect);
+        int actualWidth = windowRect.right - windowRect.left;
+        int actualHeight = windowRect.bottom - windowRect.top;
         int screenWidth = mi.rcWork.right - mi.rcWork.left;
         int screenHeight = mi.rcWork.bottom - mi.rcWork.top;
-        int x = mi.rcWork.left + (screenWidth - windowWidth) / 2;
-        int y = mi.rcWork.top + (screenHeight - windowHeight) / 2;
-        SetWindowPos(hwnd, NULL, x, y, windowWidth, windowHeight, SWP_NOZORDER | SWP_FRAMECHANGED);
+        int x = mi.rcWork.left + (screenWidth - actualWidth) / 2;
+        int y = mi.rcWork.top + (screenHeight - actualHeight) / 2;
+        SetWindowPos(hwnd, NULL, x, y, actualWidth, actualHeight,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     } else {
         SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     }
 
-    if (!showTitlebar && cornerRadius > 0) {
-        RECT rect;
-        GetWindowRect(hwnd, &rect);
-        int width = rect.right - rect.left;
-        int height = rect.bottom - rect.top;
-        HRGN hRgn = CreateRoundRectRgn(0, 0, width, height, cornerRadius, cornerRadius);
-        SetWindowRgn(hwnd, hRgn, TRUE);
-    } else {
-        SetWindowRgn(hwnd, NULL, TRUE); // Ensure region is reset if not rounded
-    }
+    UpdateRoundedWindowRegion(hwnd, IsZoomed(hwnd) != FALSE);
 
     HMENU hMenu = GetSystemMenu(hwnd, FALSE);
     if (!canClose) {
@@ -393,7 +513,7 @@ int main() {
             std::cerr << "Invalid APP_PORT in properties.config; using 2024." << std::endl;
         }
     }
-    const std::string appPortString = std::to_string(appPort);
+    std::string appPortString = std::to_string(appPort);
     
     // Check if terminal should be hidden
     bool hideTerminal = (rootConfig.count("SHOW_TERMINAL") && rootConfig["SHOW_TERMINAL"] == "false");
@@ -428,7 +548,9 @@ int main() {
 
     // Start the configurable local file server to serve project files to the webview.
     // Uses the C++ computed project root so it works correctly from any working directory.
-    // Runs as a daemon thread so it exits automatically when the main process exits.
+    // Bind synchronously so this process knows it owns the server it navigates
+    // to. If another app already occupies APP_PORT, use an OS-assigned fallback
+    // instead of navigating to an unrelated or stale process.
     {
         std::string serverScript =
             "import threading, http.server, socket, time\n"
@@ -441,21 +563,34 @@ int main() {
             "        self.send_header('Expires', '0')\n"
             "        super().end_headers()\n"
             "    def log_message(self, fmt, *a): pass\n"
-            "def _run_server():\n"
-            "    try:\n"
-            "        srv = http.server.HTTPServer(('127.0.0.1', " + appPortString + "), _ESDHandler)\n"
-            "        srv.serve_forever()\n"
-            "    except OSError:\n"
-            "        pass\n"
-            "threading.Thread(target=_run_server, daemon=True).start()\n"
-            "# Block until port is accepting connections (max ~5 s)\n"
+            "_esd_requested_port = " + appPortString + "\n"
+            "try:\n"
+            "    _esd_server = http.server.ThreadingHTTPServer(('127.0.0.1', _esd_requested_port), _ESDHandler)\n"
+            "except OSError:\n"
+            "    _esd_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _ESDHandler)\n"
+            "_esd_server.daemon_threads = True\n"
+            "_esd_actual_port = int(_esd_server.server_address[1])\n"
+            "threading.Thread(target=_esd_server.serve_forever, daemon=True).start()\n"
+            "# Block until this process's server is accepting connections (max ~5 s)\n"
             "for _ in range(50):\n"
             "    try:\n"
-            "        _c = socket.create_connection(('127.0.0.1', " + appPortString + "), timeout=0.1)\n"
+            "        _c = socket.create_connection(('127.0.0.1', _esd_actual_port), timeout=0.1)\n"
             "        _c.close(); break\n"
             "    except OSError:\n"
             "        time.sleep(0.1)\n";
-        PyRun_SimpleString(serverScript.c_str());
+        if (PyRun_SimpleString(serverScript.c_str()) != 0) {
+            std::cerr << "Failed to start the ESDK application server." << std::endl;
+        } else {
+            PyObject* mainModule = PyImport_AddModule("__main__");
+            PyObject* actualPort = mainModule
+                ? PyObject_GetAttrString(mainModule, "_esd_actual_port")
+                : nullptr;
+            if (actualPort && PyLong_Check(actualPort)) {
+                appPort = static_cast<int>(PyLong_AsLong(actualPort));
+                appPortString = std::to_string(appPort);
+            }
+            Py_XDECREF(actualPort);
+        }
     }
 
 #ifdef _WIN32
@@ -483,6 +618,8 @@ int main() {
     HWND hwnd = nullptr;
 #ifdef _WIN32
     hwnd = (HWND)w.window();
+    ShowWindow(hwnd, SW_HIDE);
+    InstallEsdkWindowProcedure(hwnd);
     
     // Load embedded icon and set it for the window taskbar/titlebar
     HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(101));
@@ -493,6 +630,29 @@ int main() {
 #endif
 
     bool dragBackground = false;
+    bool windowWaitingToShow = true;
+
+    // Every top-level document reports when its DOM is ready. The HWND stays
+    // hidden until its final config and centered bounds have already been
+    // applied, so users never see the library's default startup position.
+    w.bind("__esdWindowReady", [&](std::string) -> std::string {
+#ifdef _WIN32
+        if (hwnd && windowWaitingToShow) {
+            windowWaitingToShow = false;
+            ShowPreparedWindow(hwnd);
+        }
+#endif
+        return "";
+    });
+    w.init(
+        "(function(){"
+        "function ready(){setTimeout(function(){"
+        "if(window.__esdWindowReady)window.__esdWindowReady('');"
+        "},0);}"
+        "if(document.readyState==='loading')"
+        "window.addEventListener('DOMContentLoaded',ready,{once:true});"
+        "else ready();"
+        "})();");
 
     // Optional: Load Splash Screen Config
     std::string splashConfigPath = cwd + "/ui/splash/properties.config";
@@ -510,6 +670,10 @@ int main() {
     // timer before WebView2 has exposed transitionToMain, leaving the splash
     // visible indefinitely.
     w.bind("transitionToMain", [&](std::string req) -> std::string {
+#ifdef _WIN32
+        if (hwnd) ShowWindow(hwnd, SW_HIDE);
+#endif
+        windowWaitingToShow = true;
         ApplyWindowProperties(w, hwnd, rootConfig, dragBackground);
 #ifdef ESD_EMBED_HTML
         std::string mainHtml = GetPageHtml(mainPageFile);

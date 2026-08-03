@@ -1,11 +1,26 @@
 Here is a list of the changes made in this release:
 
+## Native Window Management
+- Changed native WebView windows to start hidden instead of briefly appearing at the library's default top-left position.
+- Made splash screens, main windows, and modal windows apply their final style, DPI-aware size, monitor position, and content before becoming visible.
+- Added document-ready native window activation so prepared windows appear centered on their first visible frame.
+- Centered modal windows on the same monitor as their parent application.
+- Hid the main window while transitioning from splash configuration to main-window configuration so the visible window never resizes or moves between layouts.
+- Preserved the native Windows sizing frame behind frameless applications so maximize, restore, snap, minimize, and work-area calculations continue working with the titlebar hidden.
+- Removed rounded window clipping while a frameless window is maximized so the WebView can fill the complete monitor work area.
+- Reapplied the configured rounded region after restoring a frameless window to its normal size.
+- Added rounded-region updates for native resize and DPI-change events.
+- Fixed minimizing a maximized frameless window and restoring it without breaking the display or losing the later restore-to-normal behavior.
+- Initialized WebView windows off-screen and revealed them only after the page rendered, preventing blank black or white startup surfaces.
+- Refreshed native frame and child compositor surfaces during reveal so the first visible frame contains the application.
+
 ## Runtime And Application Configuration
 - Added `APP_PORT` to `properties.config` so applications are no longer restricted to port 2024.
 - Added native validation for configured ports with a safe fallback to port 2024 for missing or invalid values.
 - Updated the embedded HTTP server, readiness check, splash navigation, main-page navigation, and development tooling to use the configured application port.
 - Registered the splash-to-main bridge before the first WebView navigation to prevent initialization races.
 - Added splash-side bridge polling so slower WebView initialization no longer leaves the splash screen visible indefinitely.
+- Made each embedded server bind its port synchronously and automatically select an available fallback when the configured port is already occupied.
 
 ## Python Requirements And Portable Builds
 - Added a project-level `requirements.txt` with an explicit `python==` runtime directive and support for normal pip dependencies.
@@ -28,6 +43,9 @@ Here is a list of the changes made in this release:
 - Added clean container tests for Python compilation, backend imports, application requirements, and project structure.
 - Added Docker testing to fresh development builds before local compilation.
 - Added interactive setup controls so Docker validation can be enabled or skipped.
+- Started Docker Desktop through its detached command-line interface so its dashboard window does not open during setup.
+- Hid Docker build, run, readiness, and installer processes on Windows and reduced their console output.
+- Requested Winget's silent installation mode when Docker Desktop must be installed.
 
 ## Development Workflow
 - Added `requirements.txt` to watched development files.

@@ -1,0 +1,8 @@
+.git
+.vscode
+build
+dist
+__pycache__
+*.pyc
+*.zip
+Dockerfile*
