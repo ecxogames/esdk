@@ -37,10 +37,19 @@ static std::string GetPageHtml(const std::string& path) {
 #ifndef DWMWA_CAPTION_COLOR
 #define DWMWA_CAPTION_COLOR 35
 #endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_COLOR_NONE
+#define DWMWA_COLOR_NONE 0xFFFFFFFE
+#endif
 #else
 #include <unistd.h>
 #define GetCurrentDir getcwd
 #endif
+
+std::string CallPythonBackend(const std::string& message);
+static std::string DecodeBridgePayload(const std::string& request);
 
 // ── Modal parsing helpers ──────────────────────────────────────────────────
 
@@ -194,6 +203,15 @@ static DWORD WINAPI ModalWindowThread(LPVOID param) {
             return "";
         });
 
+        // A modal owns a separate WebView, so expose the Python bridge there too.
+        modal.bind("invokeBridge", [](std::string req) -> std::string {
+            PyGILState_STATE gstate = PyGILState_Ensure();
+            std::string payload = DecodeBridgePayload(req);
+            std::string response = CallPythonBackend(payload);
+            PyGILState_Release(gstate);
+            return response;
+        });
+
         // Reveal the modal only after its document is ready. The native HWND
         // remains hidden while its final style, size, position, and content
         // are prepared, preventing the default-position startup flash.
@@ -322,6 +340,46 @@ std::string CallPythonBackend(const std::string& message) {
     return resultStr;
 }
 
+static std::string DecodeBridgePayload(const std::string& request) {
+    std::string payload = request;
+    PyObject* jsonModule = PyImport_ImportModule("json");
+    PyObject* loads = jsonModule ? PyObject_GetAttrString(jsonModule, "loads") : nullptr;
+    PyObject* requestText = PyUnicode_DecodeUTF8(request.data(), request.size(), "strict");
+    PyObject* args = requestText ? PyTuple_Pack(1, requestText) : nullptr;
+    PyObject* decoded = (loads && PyCallable_Check(loads) && args)
+        ? PyObject_CallObject(loads, args) : nullptr;
+
+    PyObject* value = nullptr;
+    if (decoded && PyList_Check(decoded) && PyList_Size(decoded) == 1)
+        value = PyList_GetItem(decoded, 0);
+    else if (decoded && PyTuple_Check(decoded) && PyTuple_Size(decoded) == 1)
+        value = PyTuple_GetItem(decoded, 0);
+    else if (decoded && PyUnicode_Check(decoded))
+        value = decoded;
+
+    if (value && PyUnicode_Check(value)) {
+        Py_ssize_t size = 0;
+        const char* text = PyUnicode_AsUTF8AndSize(value, &size);
+        if (text) payload.assign(text, static_cast<size_t>(size));
+    } else if (value && jsonModule) {
+        PyObject* normalized = PyObject_CallMethod(jsonModule, "dumps", "O", value);
+        if (normalized && PyUnicode_Check(normalized)) {
+            Py_ssize_t size = 0;
+            const char* text = PyUnicode_AsUTF8AndSize(normalized, &size);
+            if (text) payload.assign(text, static_cast<size_t>(size));
+        }
+        Py_XDECREF(normalized);
+    }
+
+    Py_XDECREF(decoded);
+    Py_XDECREF(args);
+    Py_XDECREF(requestText);
+    Py_XDECREF(loads);
+    Py_XDECREF(jsonModule);
+    if (PyErr_Occurred()) PyErr_Clear();
+    return payload;
+}
+
 #ifdef _WIN32
 struct NativeWindowState {
     WNDPROC originalProc = nullptr;
@@ -330,6 +388,12 @@ struct NativeWindowState {
 };
 
 static NativeWindowState g_nativeWindowState;
+
+static void SuppressFramelessDwmBorder(HWND hwnd) {
+    if (!hwnd || !g_nativeWindowState.frameless) return;
+    const COLORREF noBorder = static_cast<COLORREF>(DWMWA_COLOR_NONE);
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
+}
 
 static void UpdateRoundedWindowRegion(HWND hwnd, bool maximized) {
     if (!hwnd) return;
@@ -344,7 +408,8 @@ static void UpdateRoundedWindowRegion(HWND hwnd, bool maximized) {
     if (!GetWindowRect(hwnd, &rect)) return;
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
-    const int radius = g_nativeWindowState.cornerRadius;
+    const UINT dpi = GetDpiForWindow(hwnd);
+    const int radius = MulDiv(g_nativeWindowState.cornerRadius, dpi ? dpi : 96, 96);
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
     if (region && !SetWindowRgn(hwnd, region, TRUE)) {
         DeleteObject(region);
@@ -352,6 +417,14 @@ static void UpdateRoundedWindowRegion(HWND hwnd, bool maximized) {
 }
 
 static LRESULT CALLBACK EsdkWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (g_nativeWindowState.frameless) {
+        // Retain the native sizing frame for resize/snap behavior, but prevent
+        // Windows from painting its non-client border around page transitions.
+        if (message == WM_NCCALCSIZE && wParam) return 0;
+        if (message == WM_NCPAINT) return 0;
+        if (message == WM_NCACTIVATE) return TRUE;
+    }
+
     WNDPROC original = g_nativeWindowState.originalProc;
     LRESULT result = CallWindowProc(original, hwnd, message, wParam, lParam);
 
@@ -362,7 +435,13 @@ static LRESULT CALLBACK EsdkWindowProc(HWND hwnd, UINT message, WPARAM wParam, L
             UpdateRoundedWindowRegion(hwnd, false);
         }
     } else if (message == WM_DPICHANGED && g_nativeWindowState.frameless) {
+        SuppressFramelessDwmBorder(hwnd);
         UpdateRoundedWindowRegion(hwnd, IsZoomed(hwnd) != FALSE);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        RedrawWindow(hwnd, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     }
     return result;
 }
@@ -452,6 +531,7 @@ void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_
 
     g_nativeWindowState.frameless = !showTitlebar;
     g_nativeWindowState.cornerRadius = cornerRadius;
+    SuppressFramelessDwmBorder(hwnd);
     
     // Center the window on the screen and force it to redraw its frame
     HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -737,19 +817,9 @@ int main() {
     }
 
     w.bind("invokeBridge", [&](std::string req) -> std::string {
-        // webview.h sends arguments as a JSON array e.g. ["{...}"]
-        // We strip the outer array brackets to parse our raw JSON object string
-        std::string payload = "";
-        if (req.length() > 2 && req.front() == '[' && req.back() == ']') {
-            // Remove the bounding [ ] array markers
-            payload = req.substr(1, req.length() - 2);
-            // Additional minor unescaping may be necessary depending on JSON payload
-        } else {
-            payload = req;
-        }
-
         // Reacquire GIL for this callback — the main thread released it before w.run()
         PyGILState_STATE gstate = PyGILState_Ensure();
+        std::string payload = DecodeBridgePayload(req);
         std::string pyRes = CallPythonBackend(payload);
         PyGILState_Release(gstate);
         return pyRes;

@@ -19,7 +19,7 @@ if(WIN32)
     if(NOT EXISTS "${WEBVIEW2_INCLUDE_DIR}/WebView2.h")
         message(FATAL_ERROR
             "WebView2 headers not found at engine/webview2/.\n"
-            "Please run 'python scripts/setup.py' first to download them.")
+            "Please run '.\\scripts\\setup.ps1' first to download them.")
     endif()
 endif()
 
@@ -30,9 +30,11 @@ option(ESD_EMBED_HTML "Embed HTML files into the binary" OFF)
 
 if(ESD_EMBED_HTML)
     set(EMBEDDED_HTML_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/engine/embedded_html.h")
+    file(GLOB_RECURSE ESD_UI_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ui/*")
     add_custom_command(
         OUTPUT ${EMBEDDED_HTML_HEADER}
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed.py" "${EMBEDDED_HTML_HEADER}"
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/engine/tooling/embed.py" "${EMBEDDED_HTML_HEADER}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/engine/tooling/embed.py" ${ESD_UI_FILES}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Embedding HTML files into C++ header..."
         VERBATIM

@@ -18,7 +18,7 @@ ITEMS_TO_PACKAGE = [
 
 # Files to exclude from the packaged zip (relative paths, normalized)
 EXCLUDED_FILES = [
-    os.path.normpath("scripts/package.py"),
+    os.path.normpath("engine/tooling/package.py"),
 ]
 
 REPO = "ecxogames/esdk"

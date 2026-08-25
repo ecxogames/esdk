@@ -1,5 +1,28 @@
 Here is a list of the changes made in this release:
 
+## Developer Experience
+- Added friendly PowerShell commands for setup, development, builds, Docker tests, packaging, and updates.
+- Kept `scripts/` PowerShell-only and moved internal Python tooling under `engine/tooling/`.
+- Renamed the shared PowerShell bootstrapper to `package.ps1` and removed its redundant package-only wrapper.
+- Added automatic installation of the Python version requested by `requirements.txt` and automatic dependency synchronization.
+- Simplified the documentation into short, focused guides with one clear example per concept.
+- Added a documentation start page and replaced Python command examples with supported PowerShell commands.
+
+## AMAS Reliability Improvements
+- Prevented Windows from painting a white non-client border around frameless apps during navigation and DPI changes.
+- Made rounded corners DPI-aware while preserving maximize, restore, resize, and snap behavior.
+- Embedded local CSS, JavaScript, and image assets referenced by HTML pages.
+- Split large embedded pages into compiler-safe chunks and made CMake rebuild them whenever UI files change.
+- Added retry-safe cleanup for locked build and distribution folders, including project-scoped process shutdown.
+- Made standalone builds use the requested Python development runtime and include Tcl/Tk for native dialogs.
+- Decoded bridge payloads with Python's JSON parser so escaped strings and object arguments reach the backend correctly.
+- Exposed the backend bridge inside ESDK modal WebViews as well as the main application window.
+
+## Docker Reliability
+- Made the Docker command install Docker Desktop automatically when it is missing.
+- Kept Docker startup, installation, builds, and validation quiet and self-contained.
+- Exposed clean-container dependency installation, backend imports, and optional tests through one PowerShell command.
+
 ## Native Window Management
 - Changed native WebView windows to start hidden instead of briefly appearing at the library's default top-left position.
 - Made splash screens, main windows, and modal windows apply their final style, DPI-aware size, monitor position, and content before becoming visible.

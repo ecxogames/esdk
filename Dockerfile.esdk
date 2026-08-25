@@ -13,4 +13,4 @@ RUN sed -E '/^[[:space:]]*python[[:space:]]*==/Id' /tmp/esdk-requirements.txt > 
     && if [ -s /tmp/pip-requirements.txt ]; then pip install --no-cache-dir -r /tmp/pip-requirements.txt; fi
 
 COPY . .
-CMD ["python", "scripts/docker.py", "--inside-container"]
+CMD ["python", "engine/tooling/docker.py", "--inside-container"]

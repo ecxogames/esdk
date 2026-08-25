@@ -8,7 +8,7 @@ import zipfile
 import shutil
 
 try:
-    from scripts.requirements import (
+    from engine.tooling.requirements import (
         ensure_compatible_interpreter,
         has_installable_requirements,
         read_requirements,
@@ -25,14 +25,14 @@ except ImportError:
     )
 
 try:
-    from scripts.docker import ensure_docker_engine
+    from engine.tooling.docker import ensure_docker_engine
 except ImportError:
     from docker import ensure_docker_engine
 
 WEBVIEW_HEADER_URL = "https://raw.githubusercontent.com/webview/webview/0.10.0/webview.h"
 WEBVIEW2_NUGET_URL = "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2"
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TARGET_DIR = os.path.join(BASE_DIR, "engine")
 TARGET_PATH = os.path.join(TARGET_DIR, "webview.h")
 WEBVIEW2_DIR = os.path.join(TARGET_DIR, "webview2")
@@ -186,10 +186,11 @@ RUN sed -E '/^[[:space:]]*python[[:space:]]*==/Id' /tmp/esdk-requirements.txt > 
     && if [ -s /tmp/pip-requirements.txt ]; then pip install --no-cache-dir -r /tmp/pip-requirements.txt; fi
 
 COPY . .
-CMD ["python", "scripts/docker.py", "--inside-container"]
+CMD ["python", "engine/tooling/docker.py", "--inside-container"]
 '''
     dockerignore = '''.git
 .vscode
+.esdk
 build
 dist
 __pycache__
@@ -207,7 +208,7 @@ Dockerfile*
     if docker_cli:
         if ensure_docker_engine(docker_cli):
             print("[+] Docker is installed, on PATH, and its engine is ready.")
-            print("[+] Run: python scripts/dev.py, then choose Docker.")
+            print(r"[+] Run: powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1")
         else:
             print("[!] Docker installed successfully, but its engine is not ready yet.")
             print("[!] Complete any instructions shown by Docker Desktop, then rerun setup.")
@@ -346,7 +347,7 @@ def print_instructions():
         print("   ./build/ESDEngine")
     if os.path.exists(DOCKERFILE_PATH):
         print("\n3. Run backend tests in a brand-new container:")
-        print("   python scripts/dev.py")
+        print(r"   powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1")
         print("   Then answer yes when asked to use Docker.")
     print("\n" + "="*55 + "\n")
 

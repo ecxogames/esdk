@@ -1,5 +1,6 @@
 .git
 .vscode
+.esdk
 build
 dist
 __pycache__

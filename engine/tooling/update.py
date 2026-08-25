@@ -21,7 +21,7 @@ def print_header(title):
 def main():
     # Ensure we are in the right directory (project root)
     if not os.path.exists("engine") or not os.path.exists("scripts"):
-        print("[Error] Please run this script from the project root directory (e.g. 'python scripts/update.py').")
+        print(r"[Error] Run .\scripts\update.ps1 from the project root directory.")
         return
 
     print_header("ESD Suite Framework Updater")

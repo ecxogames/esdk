@@ -1,15 +1,17 @@
+import json
 import os
 import re
+import stat
 import sys
 import shutil
+import time
 import urllib.request
 import zipfile
 import subprocess
 from datetime import datetime
 
 try:
-    from scripts.requirements import (
-        ensure_compatible_interpreter,
+    from engine.tooling.requirements import (
         has_installable_requirements,
         read_requirements,
         resolved_python_version,
@@ -17,7 +19,6 @@ try:
     )
 except ImportError:
     from requirements import (
-        ensure_compatible_interpreter,
         has_installable_requirements,
         read_requirements,
         resolved_python_version,
@@ -28,6 +29,29 @@ def print_header(title):
     print("\n" + "="*50)
     print(f"  {title}")
     print("="*50)
+
+
+def _remove_distribution_tree(path):
+    if not os.path.exists(path):
+        return
+
+    def make_writable_and_retry(func, target, _error):
+        os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)
+        func(target)
+
+    last_error = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(path, onerror=make_writable_and_retry)
+            return
+        except (OSError, PermissionError) as error:
+            last_error = error
+            if attempt < 4:
+                time.sleep(0.4 * (attempt + 1))
+    raise RuntimeError(
+        f"Could not clear '{os.path.abspath(path)}'. Close an application running "
+        f"from that folder and pause OneDrive sync, then retry. Original error: {last_error}"
+    )
 
 def get_or_convert_icon(props):
     icon_path = props.get("ICON", "")
@@ -66,6 +90,32 @@ def prepare_icon():
             except:
                 pass
 
+
+def _find_build_python(version):
+    major, minor = version.split(".")[:2]
+    candidates = []
+    if os.name == "nt" and shutil.which("py"):
+        candidates.append(["py", f"-{major}.{minor}"])
+    for name in (f"python{major}.{minor}", f"python{major}{minor}", "python"):
+        executable = shutil.which(name)
+        if executable:
+            candidates.append([executable])
+
+    probe = "import json,sys; print(json.dumps([sys.executable,sys.version_info[:3]]))"
+    for command in candidates:
+        try:
+            completed = subprocess.run(command + ["-c", probe], capture_output=True, text=True,
+                                       timeout=20, check=True)
+            executable, running_version = json.loads(completed.stdout.strip().splitlines()[-1])
+            if tuple(running_version[:2]) == (int(major), int(minor)):
+                return executable
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"requirements.txt requests Python {version}, but a Python {major}.{minor} "
+        "development installation could not be located. Run .\\scripts\\setup.ps1 first."
+    )
+
 def run_cmake_build(embed_html=False):
     print_header("Compiling C++ Executable")
     prepare_icon()
@@ -80,6 +130,9 @@ def run_cmake_build(embed_html=False):
 
     cmake_configure = ["cmake", "-B", "build"]
     if embed_html:
+        python_version = resolved_python_version()
+        build_python = _find_build_python(python_version)
+        cmake_configure.append("-DPython3_EXECUTABLE=" + build_python.replace("\\", "/"))
         cmake_configure.append("-DESD_EMBED_HTML=ON")
         print("[Info] HTML embedding enabled — UI pages will be baked into the binary.")
 
@@ -108,8 +161,7 @@ def build_regular():
         return
 
     dist_dir = os.path.join("dist", "Regular")
-    if os.path.exists(dist_dir):
-        shutil.rmtree(dist_dir)
+    _remove_distribution_tree(dist_dir)
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
@@ -143,6 +195,8 @@ def _configure_embedded_python(dist_dir):
         lines = pth_file.read().splitlines()
 
     lines = ["import site" if line.strip() == "#import site" else line for line in lines]
+    if "Lib" not in lines:
+        lines.append("Lib")
     if "Lib\\site-packages" not in lines:
         lines.append("Lib\\site-packages")
 
@@ -150,10 +204,26 @@ def _configure_embedded_python(dist_dir):
         pth_file.write("\n".join(lines) + "\n")
 
 
+def _bundle_tkinter_runtime(dist_dir, python_executable):
+    python_root = os.path.dirname(os.path.abspath(python_executable))
+    sources = [
+        (os.path.join(python_root, "Lib", "tkinter"), os.path.join(dist_dir, "Lib", "tkinter")),
+        (os.path.join(python_root, "tcl"), os.path.join(dist_dir, "tcl")),
+    ]
+    runtime_files = [os.path.join(python_root, "DLLs", name)
+                     for name in ("_tkinter.pyd", "tcl86t.dll", "tk86t.dll")]
+    missing = [source for source, _ in sources if not os.path.exists(source)]
+    missing += [source for source in runtime_files if not os.path.exists(source)]
+    if missing:
+        raise RuntimeError("The build Python installation does not include Tcl/Tk: " + ", ".join(missing))
+    print(" -> Bundling Tk dialog runtime...")
+    for source, destination in sources:
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+    for source in runtime_files:
+        shutil.copy2(source, os.path.join(dist_dir, os.path.basename(source)))
+
+
 def _install_embedded_requirements(dist_dir, pip_lines):
-    if not has_installable_requirements(pip_lines):
-        print(" -> No app Python packages to install.")
-        return
 
     embedded_python = os.path.abspath(os.path.join(dist_dir, "python.exe"))
     get_pip_path = os.path.abspath(os.path.join(dist_dir, "get-pip.py"))
@@ -162,6 +232,10 @@ def _install_embedded_requirements(dist_dir, pip_lines):
         print(" -> Bootstrapping pip in the embedded Python runtime...")
         urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip_path)
         subprocess.run([embedded_python, get_pip_path, "--no-warn-script-location"], check=True)
+
+        if not has_installable_requirements(pip_lines):
+            print(" -> No app packages to install; pip is ready for later dependencies.")
+            return
 
         pip_requirements = write_pip_requirements(pip_lines)
         print(" -> Installing app packages from requirements.txt...")
@@ -189,8 +263,7 @@ def build_standalone():
         return False
 
     dist_dir = os.path.join("dist", "Standalone")
-    if os.path.exists(dist_dir):
-        shutil.rmtree(dist_dir)
+    _remove_distribution_tree(dist_dir)
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
@@ -221,7 +294,7 @@ def build_standalone():
 
     try:
         python_version = resolved_python_version()
-        ensure_compatible_interpreter(python_version)
+        build_python = _find_build_python(python_version)
         _, pip_lines = read_requirements()
     except (ValueError, RuntimeError) as error:
         print(f"[Error] {error}")
@@ -237,6 +310,7 @@ def build_standalone():
             zip_ref.extractall(dist_dir)
         os.remove(zip_path)
         _configure_embedded_python(dist_dir)
+        _bundle_tkinter_runtime(dist_dir, build_python)
         _install_embedded_requirements(dist_dir, pip_lines)
         print(f"\n[Success] Standalone build complete! Location: {os.path.abspath(dist_dir)}")
         print("You can zip this folder and send it to anyone. No installation is required!")
@@ -627,8 +701,7 @@ def build_web():
     safe_name = "".join(c for c in app_title if c.isalnum() or c in " _-").strip()
 
     dist_dir = os.path.join("dist", "Web")
-    if os.path.exists(dist_dir):
-        shutil.rmtree(dist_dir)
+    _remove_distribution_tree(dist_dir)
     os.makedirs(dist_dir)
 
     if fmt == '1':

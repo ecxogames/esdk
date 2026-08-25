@@ -1,17 +1,18 @@
 import os
+import stat
 import time
 import subprocess
 import sys
 import shutil
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 try:
-    from scripts.build import prepare_icon
+    from engine.tooling.build import prepare_icon
 except ImportError:
     prepare_icon = lambda: None
 
 try:
-    from scripts import docker
+    from engine.tooling import docker
 except ImportError:
     import docker
 
@@ -69,7 +70,48 @@ def clean_build():
     if not os.path.exists(BUILD_DIR):
         return
     print("[Dev] Clearing build directory...")
-    shutil.rmtree(BUILD_DIR)
+    _stop_build_processes()
+
+    def make_writable_and_retry(function, path, _error_info):
+        os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+        function(path)
+
+    last_error = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(BUILD_DIR, onerror=make_writable_and_retry)
+            return
+        except (OSError, PermissionError) as error:
+            last_error = error
+            time.sleep(0.4 * (attempt + 1))
+    raise RuntimeError(
+        f"Unable to clear '{os.path.abspath(BUILD_DIR)}'. Close File Explorer windows "
+        "inside the build folder and pause OneDrive sync, then retry."
+    ) from last_error
+
+
+def _stop_build_processes():
+    """Stop only ESDK processes whose executable lives in this project's build folder."""
+    if sys.platform != "win32":
+        return
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        return
+    build_root = os.path.abspath(BUILD_DIR)
+    script = (
+        "$root=[IO.Path]::GetFullPath($env:ESDK_BUILD_ROOT).TrimEnd('\\')+'\\';"
+        "Get-Process -Name ESDEngine -ErrorAction SilentlyContinue|ForEach-Object{"
+        "try{$p=$_.Path}catch{$p=$null};if($p-and[IO.Path]::GetFullPath($p).StartsWith($root,"
+        "[StringComparison]::OrdinalIgnoreCase)){Stop-Process -Id $_.Id -Force}}"
+    )
+    environment = os.environ.copy()
+    environment["ESDK_BUILD_ROOT"] = build_root
+    subprocess.run(
+        [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, timeout=15, env=environment,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    time.sleep(0.3)
 
 def build_project():
     print("[Dev] Building project...")
@@ -85,8 +127,14 @@ def build_project():
     except Exception as e:
         print(f"[Dev] Warning: pre-build step failed: {e}")
 
-    result = subprocess.run(['cmake', '--build', BUILD_DIR])
-    return result.returncode == 0
+    for attempt in range(3):
+        result = subprocess.run(['cmake', '--build', BUILD_DIR])
+        if result.returncode == 0:
+            return True
+        if attempt < 2:
+            print(f"[Dev] Build output was locked; retrying ({attempt + 2}/3)...")
+            time.sleep(0.75 * (attempt + 1))
+    return False
 
 def free_port():
     """Kill any process currently bound to APP_PORT so the new server can bind cleanly."""

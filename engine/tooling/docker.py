@@ -10,7 +10,7 @@ import time
 import unittest
 
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DOCKERFILE = os.path.join(BASE_DIR, "Dockerfile.esdk")
 IMAGE_NAME = "esdk-app-test"
 
@@ -110,6 +110,34 @@ def find_docker_desktop_executable():
         if base:
             candidates.append(os.path.join(base, "Docker", "Docker", "Docker Desktop.exe"))
     return next((candidate for candidate in dict.fromkeys(candidates) if os.path.isfile(candidate)), None)
+
+
+def install_docker_desktop():
+    """Install Docker Desktop through winget when the Docker command is absent."""
+    if sys.platform != "win32":
+        return None
+    winget = shutil.which("winget")
+    if not winget:
+        print("[Error] Windows Package Manager is required for automatic Docker setup.")
+        return None
+    print("[Docker] Docker Desktop is not installed. Installing it now...")
+    try:
+        result = subprocess.run(
+            [winget, "install", "--id", "Docker.DockerDesktop", "--exact", "--silent",
+             "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=900,
+            **silent_process_options(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[Error] Docker Desktop installation failed: {error}")
+        return None
+    if result.returncode != 0:
+        print(f"[Error] Docker Desktop installation failed with exit code {result.returncode}.")
+        return None
+    return find_docker_executable()
 
 
 def docker_engine_is_ready(docker_cli):
@@ -213,12 +241,12 @@ def run_container_tests():
 def run_disposable_container():
     """Build the app snapshot and run it once in a new disposable container."""
     if not os.path.exists(DOCKERFILE):
-        print("[Error] Docker is not configured. Run: python scripts/setup.py")
+        print(r"[Error] Docker is not configured. Run: powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1")
         return 1
-    docker_cli = find_docker_executable()
+    docker_cli = find_docker_executable() or install_docker_desktop()
     if not docker_cli:
-        print("[Error] Docker is not installed or is not available in PATH.")
-        print("[Error] Run: python scripts/setup.py and choose Docker setup.")
+        print("[Error] Docker could not be prepared automatically.")
+        print("[Error] Restart Windows if the Docker installer requested it, then retry.")
         return 1
     if not ensure_docker_engine(docker_cli):
         return 1
