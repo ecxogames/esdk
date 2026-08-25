@@ -1,6 +1,7 @@
 /build
-/.esdk
 /.edk
+/node_modules
+/.esdk
 /prompts
 /.vscode
 /dist
@@ -14,3 +15,5 @@
 /server/__pycache__
 *.zip
 *__pycache__
+/node_modules
+/.edk

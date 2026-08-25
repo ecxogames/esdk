@@ -24,7 +24,7 @@ def main():
         print(r"[Error] Run .\scripts\update.ps1 from the project root directory.")
         return
 
-    print_header("ESD Suite Framework Updater")
+    print_header("EDK Updater")
     print("Checking for the latest release on GitHub...")
     
     try:

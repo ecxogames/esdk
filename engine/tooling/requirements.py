@@ -1,4 +1,4 @@
-"""Helpers for ESDK's requirements.txt runtime directive and pip packages."""
+"""Helpers for EDK's requirements.txt runtime directive and pip packages."""
 
 import os
 import re
@@ -7,9 +7,7 @@ import tempfile
 
 
 PYTHON_DIRECTIVE = re.compile(r"^python\s*==\s*([0-9]+\.[0-9]+\.[0-9]+)$", re.IGNORECASE)
-FRONTEND_DIRECTIVE = re.compile(
-    r"^(tailwind|tailwindcss|@tailwindcss/cli)\s*(?:==|=)", re.IGNORECASE
-)
+FRONTEND_DIRECTIVE = re.compile(r"^(tailwind|tailwindcss|@tailwindcss/cli)\s*(?:==|=)", re.IGNORECASE)
 
 
 def read_requirements(path="requirements.txt"):
@@ -47,13 +45,13 @@ def ensure_compatible_interpreter(version):
         raise RuntimeError(
             f"requirements.txt requests Python {version}, but this build is running with "
             f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}. "
-            f"Run the ESDK scripts with Python {requested[0]}.{requested[1]}."
+            f"Run the EDK scripts with Python {requested[0]}.{requested[1]}."
         )
 
 
 def write_pip_requirements(lines):
     handle = tempfile.NamedTemporaryFile(
-        mode="w", suffix="-esdk-requirements.txt", delete=False, encoding="utf-8"
+        mode="w", suffix="-edk-requirements.txt", delete=False, encoding="utf-8"
     )
     with handle:
         handle.write("\n".join(lines).strip() + "\n")

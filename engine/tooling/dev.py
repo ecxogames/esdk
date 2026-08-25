@@ -41,7 +41,6 @@ def get_exe_path():
         os.path.join('build', 'Debug', 'EDKEngine.exe'),
         os.path.join('build', 'Release', 'EDKEngine.exe'),
         os.path.join('build', 'EDKEngine.exe'),
-        os.path.join('build', 'EDKEngine'),
         os.path.join('build', 'Debug', 'ESDEngine.exe'),
         os.path.join('build', 'Release', 'ESDEngine.exe'),
         os.path.join('build', 'ESDEngine.exe'),
@@ -100,7 +99,7 @@ def clean_build():
 
 
 def _stop_build_processes():
-    """Stop only ESDK processes whose executable lives in this project's build folder."""
+    """Stop only EDK processes whose executable lives in this project's build folder."""
     if sys.platform != "win32":
         return
     powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -108,13 +107,13 @@ def _stop_build_processes():
         return
     build_root = os.path.abspath(BUILD_DIR)
     script = (
-        "$root=[IO.Path]::GetFullPath($env:ESDK_BUILD_ROOT).TrimEnd('\\')+'\\';"
-        "Get-Process -Name EDKEngine,ESDEngine -ErrorAction SilentlyContinue|ForEach-Object{"
+        "$root=[IO.Path]::GetFullPath($env:EDK_BUILD_ROOT).TrimEnd('\\')+'\\';"
+        "Get-Process -Name ESDEngine -ErrorAction SilentlyContinue|ForEach-Object{"
         "try{$p=$_.Path}catch{$p=$null};if($p-and[IO.Path]::GetFullPath($p).StartsWith($root,"
         "[StringComparison]::OrdinalIgnoreCase)){Stop-Process -Id $_.Id -Force}}"
     )
     environment = os.environ.copy()
-    environment["ESDK_BUILD_ROOT"] = build_root
+    environment["EDK_BUILD_ROOT"] = build_root
     subprocess.run(
         [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True, text=True, timeout=15, env=environment,
@@ -209,6 +208,15 @@ def start_app(fresh=False):
         return None
     return launch_exe()
 
+
+def validate_with_docker_if_configured():
+    """Run disposable tests only when setup created the optional Docker definition."""
+    dockerfile = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "Dockerfile.edk")
+    if not os.path.isfile(dockerfile):
+        print("[Dev] Docker validation is not enabled; continuing with the local build.")
+        return True
+    return docker.main() == 0
+
 def ask_startup_choice():
     print("\n" + "=" * 50)
     print("  EDK Desktop Development")
@@ -234,12 +242,12 @@ def main():
             app_process = subprocess.Popen([exe])
         else:
             print("[Dev] No previous build found — running a fresh build instead.")
-            if docker.main() != 0:
+            if not validate_with_docker_if_configured():
                 print("[Dev] Docker container setup failed; the fresh build was cancelled.")
                 return 1
             app_process = start_app(fresh=True)
     else:
-        if docker.main() != 0:
+        if not validate_with_docker_if_configured():
             print("[Dev] Docker container setup failed; the fresh build was cancelled.")
             return 1
         app_process = start_app(fresh=True)

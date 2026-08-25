@@ -21,7 +21,7 @@ EXCLUDED_FILES = [
     os.path.normpath("engine/tooling/package.py"),
 ]
 
-REPO = "ecxogames/esdk"
+REPO = "ecxogames/edk"
 
 
 def fetch_tags() -> bool:
@@ -196,7 +196,7 @@ def choose_package_mode() -> str:
 
 
 def build_test_archive() -> bool:
-    zip_filename = "esd-engine-test.zip"
+    zip_filename = "edk-test.zip"
     if os.path.exists(zip_filename):
         print(f"[Warning] '{zip_filename}' already exists and will be overwritten.")
 
@@ -211,7 +211,7 @@ def build_test_archive() -> bool:
 
 def main():
     print("=" * 50)
-    print("  ESD Suite Framework Packager")
+    print("  EDK Packager")
     print("=" * 50)
 
     if not os.path.exists("engine") or not os.path.exists("scripts"):
@@ -244,7 +244,7 @@ def main():
         print(f"[Error] Could not read a message from tag '{tag}'. Aborting.")
         return
 
-    zip_filename = f"esdk-{version}.zip"
+    zip_filename = f"edk-{version}.zip"
     if os.path.exists(zip_filename):
         print(f"[Warning] '{zip_filename}' already exists and will be overwritten.")
 

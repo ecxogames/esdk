@@ -1,4 +1,4 @@
-"""Disposable Docker development runner and in-container ESDK test command."""
+"""Disposable Docker development runner and in-container EDK test command."""
 
 import compileall
 import os
@@ -11,8 +11,8 @@ import unittest
 
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DOCKERFILE = os.path.join(BASE_DIR, "Dockerfile.esdk")
-IMAGE_NAME = "esdk-app-test"
+DOCKERFILE = os.path.join(BASE_DIR, "Dockerfile.edk")
+IMAGE_NAME = "edk-app-test"
 
 
 def silent_process_options():

@@ -7,14 +7,33 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 UI_DIR = PROJECT_DIR / "ui"
 FRONTEND_DIRS = ("pages", "components", "scripts", "functions", "classes", "modules", "styles", "themes")
+
+
+def _remove_tree(path: Path):
+    if not path.exists():
+        return
+    def retry(function, target, _error):
+        Path(target).chmod(Path(target).stat().st_mode | stat.S_IWRITE)
+        function(target)
+    last_error = None
+    for attempt in range(5):
+        try:
+            shutil.rmtree(path, onerror=retry)
+            return
+        except (OSError, PermissionError) as error:
+            last_error = error
+            time.sleep(0.35 * (attempt + 1))
+    raise RuntimeError(f"Could not replace frontend output '{path}': {last_error}")
 
 
 class _TargetFilter(HTMLParser):
@@ -127,6 +146,15 @@ def ensure_frontend_dependencies(quiet=False):
 
 
 def _tailwind_enabled() -> bool:
+    package_file = PROJECT_DIR / "package.json"
+    if package_file.exists():
+        try:
+            package = json.loads(package_file.read_text(encoding="utf-8"))
+            dependencies = {**package.get("dependencies", {}), **package.get("devDependencies", {})}
+            if "tailwindcss" in dependencies or "@tailwindcss/cli" in dependencies:
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
     requirements = PROJECT_DIR / "requirements.txt"
     if not requirements.exists():
         return False
@@ -197,7 +225,9 @@ def compile_frontend(target="desktop", *, optimize=False, output: Path | None = 
         raise ValueError("target must be 'desktop' or 'web'")
     ensure_frontend_dependencies(quiet=quiet)
     destination = output or PROJECT_DIR / ".edk" / target
-    staging_root = Path(tempfile.mkdtemp(prefix=".edk-frontend-", dir=PROJECT_DIR))
+    state_root = PROJECT_DIR / ".edk"
+    state_root.mkdir(exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(prefix="frontend-", dir=state_root))
     ui_staging = staging_root / "ui"
     tailwind = _tailwind_enabled()
     try:
@@ -217,10 +247,10 @@ def compile_frontend(target="desktop", *, optimize=False, output: Path | None = 
             for stylesheet in ui_staging.rglob("*.css"):
                 stylesheet.write_text(_minify_css(stylesheet.read_text(encoding="utf-8")), encoding="utf-8")
         if destination.exists():
-            shutil.rmtree(destination)
+            _remove_tree(destination)
         shutil.copytree(staging_root, destination)
     finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
+        _remove_tree(staging_root)
     return destination
 
 

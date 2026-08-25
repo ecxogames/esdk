@@ -19,7 +19,7 @@ if(WIN32)
     if(NOT EXISTS "${WEBVIEW2_INCLUDE_DIR}/WebView2.h")
         message(FATAL_ERROR
             "WebView2 headers not found at engine/webview2/.\n"
-            "Please run '.\\scripts\\setup.ps1' first to download them.")
+            "Please run '.\\scripts\\setup.bat' first to download them.")
     endif()
 endif()
 

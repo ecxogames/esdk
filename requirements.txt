@@ -1,8 +1,5 @@
-# ESDK runtime directive. Use a full version available from python.org.
+# EDK desktop-backend runtime. Use a full version available from python.org.
 python==3.11.9
 
 # Add normal pip requirements below, one per line. For example:
 # requests==2.32.4
-
-# Frontend compiler dependencies are installed through Node automatically.
-tailwind==4.3.3

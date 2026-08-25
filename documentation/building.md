@@ -1,4 +1,4 @@
-# Build the Desktop App or Website
+# Build the App
 
 ## First-time setup
 
@@ -28,8 +28,6 @@ Choose:
 - **Standalone** for a portable folder with Python included.
 - **Regular** for local testing.
 - **Web** for browser-only UI output.
-
-Web Publish compiles the shared `ui/` source into `dist/Web`. It removes `target="desktop"` elements, compiles TypeScript and Tailwind, minifies CSS, and mangles JavaScript. Upload the contents of `dist/Web` to a static web host.
 
 Standalone and installer builds embed local CSS, JavaScript, images, and HTML pages into the app.
 

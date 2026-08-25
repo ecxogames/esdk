@@ -1,11 +1,15 @@
-# Overview
+# Python Backend
+
 The Python backend runs while the desktop app is open. JavaScript asks it to do work through the EDK bridge.
 
 ## Request flow
-How it works is that the Javascript contacts the server api, which listens to calls which then execute public/private python methods that returns a response to javascript.
 
+```text
+JavaScript -> EDK bridge -> server/api.py -> public/ or private/ -> JavaScript
+```
 
 ## Small example
+
 Add an action to `server/api.py`:
 
 ```python

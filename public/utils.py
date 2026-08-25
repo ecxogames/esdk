@@ -6,7 +6,7 @@ def generate_greeting(name):
     """Returns a friendly greeting string."""
     if not name:
         return "Hello, anonymous user!"
-    return f"Hello, {name}! Welcome to the ESD Suite Framework."
+    return f"Hello, {name}! Welcome to EDK."
 
 def get_app_info():
     """Returns basic configuration or version info for the frontend UI."""

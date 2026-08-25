@@ -1,12 +1,21 @@
 Here is a list of the changes made in this release:
 
+## EDK Unified Desktop and Web Package
+- Combined the EWDK frontend compiler with the desktop SDK and rebranded the package as EDK.
+- Made `ui/` the shared source folder for desktop applications and websites.
+- Added `target="desktop"` and `target="web"` element filtering while preserving normal link targets such as `_blank`.
+- Added TypeScript compilation, Tailwind generation, CSS minification, JavaScript mangling, and browser-ready Web Publish output.
+- Added automatic Node.js and frontend dependency setup through the Windows batch commands.
+- Compiled desktop development and embedded releases from the same frontend pipeline used for web publishing.
+- Renamed the native executable target to `EDKEngine` and the Docker definition to `Dockerfile.edk`.
+
 ## Developer Experience
-- Added friendly PowerShell commands for setup, development, builds, Docker tests, packaging, and updates.
-- Kept `scripts/` PowerShell-only and moved internal Python tooling under `engine/tooling/`.
-- Renamed the shared PowerShell bootstrapper to `package.ps1` and removed its redundant package-only wrapper.
+- Added friendly Windows batch commands for setup, development, builds, Docker tests, packaging, and updates.
+- Kept public launchers as `.bat` files and moved internal Python tooling under `engine/tooling/`.
+- Added a shared internal dependency bootstrapper used by the standalone batch launchers.
 - Added automatic installation of the Python version requested by `requirements.txt` and automatic dependency synchronization.
 - Simplified the documentation into short, focused guides with one clear example per concept.
-- Added a documentation start page and replaced Python command examples with supported PowerShell commands.
+- Added a documentation start page and replaced Python command examples with supported batch commands.
 
 ## AMAS Reliability Improvements
 - Prevented Windows from painting a white non-client border around frameless apps during navigation and DPI changes.

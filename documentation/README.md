@@ -1,6 +1,6 @@
 # EDK Documentation
 
-EDK builds desktop apps and websites from one shared UI, with an optional embedded Python backend for desktop features.
+EDK builds desktop apps and websites from one shared UI, with an embedded Python backend for desktop features.
 
 ## Start here
 
@@ -12,7 +12,6 @@ The batch commands find or install the requested Python version and install the 
 
 ## Guides
 
-- [Shared desktop and web UI](frontend.md): pages, TypeScript, Tailwind, and platform targets.
 - [Backend](backend.md): call Python from JavaScript.
 - [Public modules](public-modules.md): reusable, non-sensitive Python code.
 - [Private modules](private-modules.md): files, databases, secrets, and protected work.

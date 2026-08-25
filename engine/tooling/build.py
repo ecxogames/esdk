@@ -174,7 +174,7 @@ def build_regular():
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
-    app_title = props.get("TITLE", "EDKEngine")
+    app_title = props.get("TITLE", "ESDEngine")
     safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
 
     print("\n -> Copying executable...")
@@ -276,7 +276,7 @@ def build_standalone():
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
-    app_title = props.get("TITLE", "EDKEngine")
+    app_title = props.get("TITLE", "ESDEngine")
     safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
 
     print("\n -> Copying executable...")
@@ -675,15 +675,51 @@ def _build_web_zip(pages_dir, dist_dir, safe_name, do_obfuscate):
 
 def build_web():
     print_header("EDK WEB PUBLISH")
-    print("Compiles ui/ into a browser-ready site in dist/Web.")
+    print("Compiles the shared ui/ folder into a browser-ready site in dist/Web.")
+    answer = input("Optimize CSS and JavaScript for publishing? (Y/n): ").strip().lower()
+    publish_web(optimize=answer not in {"n", "no"})
+    return
+
+    pages_dir = os.path.join("ui", "pages")
+    if not os.path.exists(pages_dir):
+        print(f"[Error] Pages folder not found: {os.path.abspath(pages_dir)}")
+        return
+
+    html_files = sorted(f for f in os.listdir(pages_dir) if f.lower().endswith('.html'))
+    if not html_files:
+        print("[Error] No HTML files found in ui/pages/")
+        return
+
+    print(f"\n -> Found {len(html_files)} page(s): {', '.join(html_files)}")
+
     while True:
-        obf = input("\nOptimize CSS and JavaScript for publishing? (Y/n): ").strip().lower()
-        if not obf:
-            obf = "y"
+        print("\nSelect web output format:")
+        print(" 1. Single HTML file  (all pages combined into one .html)")
+        print(" 2. Structured ZIP    (pages folder packaged as a .zip archive)")
+        fmt = input("Choose format (1/2): ").strip()
+        if fmt in ('1', '2'):
+            break
+        print("Invalid choice. Please enter 1 or 2.")
+
+    while True:
+        obf = input("\nObfuscate / minify the output? (y/n): ").strip().lower()
         if obf in ('y', 'n', 'yes', 'no'):
             break
         print("Please enter 'y' or 'n'.")
-    publish_web(optimize=obf.startswith('y'))
+    do_obfuscate = obf.startswith('y')
+
+    props = parse_properties_config()
+    app_title = props.get("TITLE", "EDK Application")
+    safe_name = "".join(c for c in app_title if c.isalnum() or c in " _-").strip()
+
+    dist_dir = os.path.join("dist", "Web")
+    _remove_distribution_tree(dist_dir)
+    os.makedirs(dist_dir)
+
+    if fmt == '1':
+        _build_web_single_html(pages_dir, html_files, dist_dir, safe_name, do_obfuscate)
+    else:
+        _build_web_zip(pages_dir, dist_dir, safe_name, do_obfuscate)
 
 def main():
     while True:
@@ -691,7 +727,7 @@ def main():
         print(" 1. Installer         (Creates a Standalone app + generated Setup.exe script)")
         print(" 2. Sandbox/Standalone(Builds a portable folder with embedded Python - No setup required)")
         print(" 3. Regular           (Natively builds .exe - Local Dev Testing ONLY)")
-        print(" 4. Web Publish       (Packages ui/pages as a single HTML or structured ZIP)")
+        print(" 4. Web Publish       (Compiles the shared ui/ folder for browsers)")
         print(" 5. Exit")
 
         choice = input("\nSelect build type (1/2/3/4/5): ").strip()

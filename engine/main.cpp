@@ -886,6 +886,24 @@ int main() {
 
     // Inject Javascript to intercept external links
     w.init(R"(
+        // Send window.open(http/https) to the user's default browser instead
+        // of creating another embedded WebView window.
+        const edkOriginalWindowOpen = window.open.bind(window);
+        window.open = function(url, target, features) {
+            if (url !== undefined && url !== null && window.openExternalLink) {
+                try {
+                    const resolved = new URL(String(url), window.location.href);
+                    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+                        window.openExternalLink(resolved.href);
+                        return null;
+                    }
+                } catch (_) {
+                    // Preserve normal browser behavior for invalid or unsupported URLs.
+                }
+            }
+            return edkOriginalWindowOpen(url, target, features);
+        };
+
         window.addEventListener('click', function(e) {
             let target = e.target.closest('a');
             if (target && target.href) {

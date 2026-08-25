@@ -37,7 +37,7 @@ TARGET_DIR = os.path.join(BASE_DIR, "engine")
 TARGET_PATH = os.path.join(TARGET_DIR, "webview.h")
 WEBVIEW2_DIR = os.path.join(TARGET_DIR, "webview2")
 BUILD_DIR = os.path.join(BASE_DIR, "build")
-DOCKERFILE_PATH = os.path.join(BASE_DIR, "Dockerfile.esdk")
+DOCKERFILE_PATH = os.path.join(BASE_DIR, "Dockerfile.edk")
 DOCKERIGNORE_PATH = os.path.join(BASE_DIR, ".dockerignore")
 
 
@@ -181,8 +181,8 @@ RUN apt-get update \\
     && apt-get install -y --no-install-recommends build-essential tk \\
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /tmp/esdk-requirements.txt
-RUN sed -E '/^[[:space:]]*python[[:space:]]*==/Id' /tmp/esdk-requirements.txt > /tmp/pip-requirements.txt \\
+COPY requirements.txt /tmp/edk-requirements.txt
+RUN sed -E '/^[[:space:]]*(python|tailwind|tailwindcss|@tailwindcss\\/cli)[[:space:]]*(==|=)/Id' /tmp/edk-requirements.txt > /tmp/pip-requirements.txt \\
     && if [ -s /tmp/pip-requirements.txt ]; then pip install --no-cache-dir -r /tmp/pip-requirements.txt; fi
 
 COPY . .
@@ -190,7 +190,6 @@ CMD ["python", "engine/tooling/docker.py", "--inside-container"]
 '''
     dockerignore = '''.git
 .vscode
-.esdk
 .edk
 build
 dist
@@ -343,9 +342,9 @@ def print_instructions():
     print("   cmake --build .")
     print("\n2. Run the application:")
     if os.name == 'nt': # Windows
-        print("   .\\build\\Debug\\EDKEngine.exe")
+        print("   .\\build\\Debug\\ESDEngine.exe")
     else:
-        print("   ./build/EDKEngine")
+        print("   ./build/ESDEngine")
     if os.path.exists(DOCKERFILE_PATH):
         print("\n3. Run backend tests in a brand-new container:")
         print(r"   powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1")
