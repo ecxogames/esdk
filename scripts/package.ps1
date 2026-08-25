@@ -50,6 +50,21 @@ function Install-Python([string]$Version) {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [Environment]::GetEnvironmentVariable('Path', 'Machine')
 }
 
+function Ensure-Node {
+    $node = Get-Command node.exe -ErrorAction SilentlyContinue
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($node -and $npm) { return $npm.Source }
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $winget) { throw 'Windows Package Manager (winget) is required to install the frontend compiler.' }
+    Write-Step 'Installing the EDK frontend compiler runtime...'
+    & $winget.Source install --id OpenJS.NodeJS.LTS --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) { throw "Node.js installation failed with exit code $LASTEXITCODE." }
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { throw 'Node.js was installed but npm is not available yet. Open a new terminal and retry.' }
+    return $npm.Source
+}
+
 function Invoke-Python([string]$PythonCommand, [string[]]$Arguments) {
     & $PythonCommand @Arguments
     $script:PythonExitCode = $LASTEXITCODE
@@ -57,7 +72,7 @@ function Invoke-Python([string]$PythonCommand, [string[]]$Arguments) {
 
 try {
     Write-Host ''
-    Write-Host '  ESDK' -ForegroundColor Magenta -NoNewline
+    Write-Host '  EDK' -ForegroundColor Magenta -NoNewline
     Write-Host "  $($Tool.ToUpperInvariant())" -ForegroundColor White
 
     $version = Get-RequestedPythonVersion
@@ -77,7 +92,10 @@ try {
         Write-Step 'Installing project dependencies...'
         $pipFile = Join-Path $StateDirectory 'pip-requirements.txt'
         $pipLines = if (Test-Path $Requirements) {
-            Get-Content -LiteralPath $Requirements | Where-Object { $_ -notmatch '^\s*python\s*==' }
+            Get-Content -LiteralPath $Requirements | Where-Object {
+                $_ -notmatch '^\s*python\s*==' -and
+                $_ -notmatch '^\s*(tailwind|tailwindcss|@tailwindcss/cli)\s*(==|=)'
+            }
         } else { @() }
         Set-Content -LiteralPath $pipFile -Value $pipLines -Encoding UTF8
         Invoke-Python $pythonCommand @('-m', 'pip', 'install', '--disable-pip-version-check', '-r', $pipFile)
@@ -87,8 +105,26 @@ try {
         Write-Success 'Dependencies are ready.'
     }
 
+    $packageJson = Join-Path $ProjectRoot 'package.json'
+    if (Test-Path -LiteralPath $packageJson) {
+        $npm = Ensure-Node
+        $nodeModules = Join-Path $ProjectRoot 'node_modules'
+        $packageHash = (Get-FileHash -LiteralPath $packageJson -Algorithm SHA256).Hash
+        $nodeStamp = Join-Path $StateDirectory 'frontend.sha256'
+        $installedNodeHash = if (Test-Path $nodeStamp) { (Get-Content -LiteralPath $nodeStamp -Raw).Trim() } else { '' }
+        if (-not (Test-Path $nodeModules) -or $packageHash -ne $installedNodeHash) {
+            Write-Step 'Installing frontend compiler dependencies...'
+            Push-Location $ProjectRoot
+            try { & $npm install --no-audit --no-fund }
+            finally { Pop-Location }
+            if ($LASTEXITCODE -ne 0) { throw 'Frontend compiler dependencies could not be installed.' }
+            Set-Content -LiteralPath $nodeStamp -Value $packageHash -NoNewline
+            Write-Success 'Frontend compiler is ready.'
+        }
+    }
+
     $script = Join-Path $ProjectRoot "engine\tooling\$Tool.py"
-    if (-not (Test-Path -LiteralPath $script)) { throw "Internal ESDK tool is missing: $script" }
+    if (-not (Test-Path -LiteralPath $script)) { throw "Internal EDK tool is missing: $script" }
     Write-Step "Starting $Tool..."
     Push-Location $ProjectRoot
     try {

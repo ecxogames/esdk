@@ -475,7 +475,7 @@ static void ShowPreparedWindow(HWND hwnd) {
 
 // Applies window properties dynamically to the window handle
 void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_map<std::string, std::string>& config, bool& dragBackgroundOut) {
-    std::string title = config.count("TITLE") ? config.at("TITLE") : "ESD Suite Framework";
+    std::string title = config.count("TITLE") ? config.at("TITLE") : "EDK Application";
     w.set_title(title);
 
     int windowWidth = 800;
@@ -623,6 +623,15 @@ int main() {
     // Build a forward-slash version of cwd safe to embed in a Python string literal
     std::string pyCwd = cwd;
     for (char& c : pyCwd) { if (c == '\\') c = '/'; }
+    std::string pyWebRoot = pyCwd;
+#ifdef _WIN32
+    if (const char* configuredRoot = std::getenv("EDK_WEB_ROOT")) {
+        if (*configuredRoot) {
+            pyWebRoot = configuredRoot;
+            for (char& c : pyWebRoot) { if (c == '\\') c = '/'; }
+        }
+    }
+#endif
 
     PyRun_SimpleString(("import sys\nsys.path.insert(0, '" + pyCwd + "')\nprint('Python backend initialized.')").c_str());
 
@@ -636,7 +645,7 @@ int main() {
             "import threading, http.server, socket, time\n"
             "class _ESDHandler(http.server.SimpleHTTPRequestHandler):\n"
             "    def __init__(self, *a, **kw):\n"
-            "        super().__init__(*a, directory='" + pyCwd + "', **kw)\n"
+            "        super().__init__(*a, directory='" + pyWebRoot + "', **kw)\n"
             "    def end_headers(self):\n"
             "        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')\n"
             "        self.send_header('Pragma', 'no-cache')\n"
@@ -659,7 +668,7 @@ int main() {
             "    except OSError:\n"
             "        time.sleep(0.1)\n";
         if (PyRun_SimpleString(serverScript.c_str()) != 0) {
-            std::cerr << "Failed to start the ESDK application server." << std::endl;
+            std::cerr << "Failed to start the EDK application server." << std::endl;
         } else {
             PyObject* mainModule = PyImport_AddModule("__main__");
             PyObject* actualPort = mainModule

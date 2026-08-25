@@ -191,6 +191,7 @@ CMD ["python", "engine/tooling/docker.py", "--inside-container"]
     dockerignore = '''.git
 .vscode
 .esdk
+.edk
 build
 dist
 __pycache__
@@ -342,9 +343,9 @@ def print_instructions():
     print("   cmake --build .")
     print("\n2. Run the application:")
     if os.name == 'nt': # Windows
-        print("   .\\build\\Debug\\ESDEngine.exe")
+        print("   .\\build\\Debug\\EDKEngine.exe")
     else:
-        print("   ./build/ESDEngine")
+        print("   ./build/EDKEngine")
     if os.path.exists(DOCKERFILE_PATH):
         print("\n3. Run backend tests in a brand-new container:")
         print(r"   powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1")
@@ -352,7 +353,7 @@ def print_instructions():
     print("\n" + "="*55 + "\n")
 
 if __name__ == "__main__":
-    print("Starting ESD Suite Environment Setup...\n")
+    print("Starting EDK Environment Setup...\n")
     configure_docker()
     install_python_requirements()
     download_webview()

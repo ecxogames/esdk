@@ -16,6 +16,11 @@ try:
 except ImportError:
     import docker
 
+try:
+    from engine.tooling.frontend import compile_frontend
+except ImportError:
+    from frontend import compile_frontend
+
 WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'requirements.txt', 'CMakeLists.txt']
 BUILD_DIR = 'build'
 
@@ -33,6 +38,10 @@ def get_server_port():
 
 def get_exe_path():
     bases = [
+        os.path.join('build', 'Debug', 'EDKEngine.exe'),
+        os.path.join('build', 'Release', 'EDKEngine.exe'),
+        os.path.join('build', 'EDKEngine.exe'),
+        os.path.join('build', 'EDKEngine'),
         os.path.join('build', 'Debug', 'ESDEngine.exe'),
         os.path.join('build', 'Release', 'ESDEngine.exe'),
         os.path.join('build', 'ESDEngine.exe'),
@@ -100,7 +109,7 @@ def _stop_build_processes():
     build_root = os.path.abspath(BUILD_DIR)
     script = (
         "$root=[IO.Path]::GetFullPath($env:ESDK_BUILD_ROOT).TrimEnd('\\')+'\\';"
-        "Get-Process -Name ESDEngine -ErrorAction SilentlyContinue|ForEach-Object{"
+        "Get-Process -Name EDKEngine,ESDEngine -ErrorAction SilentlyContinue|ForEach-Object{"
         "try{$p=$_.Path}catch{$p=$null};if($p-and[IO.Path]::GetFullPath($p).StartsWith($root,"
         "[StringComparison]::OrdinalIgnoreCase)){Stop-Process -Id $_.Id -Force}}"
     )
@@ -116,6 +125,7 @@ def _stop_build_processes():
 def build_project():
     print("[Dev] Building project...")
     try:
+        compile_frontend("desktop", optimize=False, quiet=True)
         prepare_icon()
         cache_file = os.path.join(BUILD_DIR, "CMakeCache.txt")
         if os.path.exists(cache_file):
@@ -187,7 +197,9 @@ def launch_exe():
     free_port()
     clear_webview_cache()
     print(f"[Dev] Starting {exe}...")
-    return subprocess.Popen([exe])
+    environment = os.environ.copy()
+    environment["EDK_WEB_ROOT"] = os.path.abspath(os.path.join(".edk", "desktop"))
+    return subprocess.Popen([exe], env=environment)
 
 def start_app(fresh=False):
     if fresh:
@@ -199,7 +211,7 @@ def start_app(fresh=False):
 
 def ask_startup_choice():
     print("\n" + "=" * 50)
-    print("  ESD Suite - Dev Server")
+    print("  EDK Desktop Development")
     print("=" * 50)
     print("\n  [1] Fresh build   — validates in a new container, then compiles from scratch")
     print("  [2] Previous build — launches the last compiled binary immediately")

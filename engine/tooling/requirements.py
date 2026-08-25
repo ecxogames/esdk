@@ -7,6 +7,9 @@ import tempfile
 
 
 PYTHON_DIRECTIVE = re.compile(r"^python\s*==\s*([0-9]+\.[0-9]+\.[0-9]+)$", re.IGNORECASE)
+FRONTEND_DIRECTIVE = re.compile(
+    r"^(tailwind|tailwindcss|@tailwindcss/cli)\s*(?:==|=)", re.IGNORECASE
+)
 
 
 def read_requirements(path="requirements.txt"):
@@ -24,6 +27,8 @@ def read_requirements(path="requirements.txt"):
                 if python_version:
                     raise ValueError("requirements.txt contains more than one python== version directive")
                 python_version = match.group(1)
+            elif FRONTEND_DIRECTIVE.match(stripped):
+                continue
             else:
                 pip_lines.append(raw_line.rstrip("\n"))
 

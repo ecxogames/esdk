@@ -3,3 +3,6 @@ python==3.11.9
 
 # Add normal pip requirements below, one per line. For example:
 # requests==2.32.4
+
+# Frontend compiler dependencies are installed through Node automatically.
+tailwind==4.3.3

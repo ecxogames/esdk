@@ -11,6 +11,11 @@ import subprocess
 from datetime import datetime
 
 try:
+    from engine.tooling.frontend import compile_frontend, publish_web
+except ImportError:
+    from frontend import compile_frontend, publish_web
+
+try:
     from engine.tooling.requirements import (
         has_installable_requirements,
         read_requirements,
@@ -119,6 +124,7 @@ def _find_build_python(version):
 def run_cmake_build(embed_html=False):
     print_header("Compiling C++ Executable")
     prepare_icon()
+    compiled_frontend = compile_frontend("desktop", optimize=embed_html, quiet=True)
 
     # Force CMake to re-evaluate whether icon.rc exists by removing the cache.
     cache_file = os.path.join("build", "CMakeCache.txt")
@@ -134,6 +140,7 @@ def run_cmake_build(embed_html=False):
         build_python = _find_build_python(python_version)
         cmake_configure.append("-DPython3_EXECUTABLE=" + build_python.replace("\\", "/"))
         cmake_configure.append("-DESD_EMBED_HTML=ON")
+        cmake_configure.append("-DEDK_UI_ROOT=" + str(compiled_frontend / "ui").replace("\\", "/"))
         print("[Info] HTML embedding enabled — UI pages will be baked into the binary.")
 
     subprocess.run(cmake_configure, check=True)
@@ -141,6 +148,8 @@ def run_cmake_build(embed_html=False):
 
 def find_exe():
     bases = [
+        os.path.join('build', 'Release', 'EDKEngine.exe'),
+        os.path.join('build', 'EDKEngine.exe'),
         os.path.join('build', 'Release', 'ESDEngine.exe'),
         os.path.join('build', 'ESDEngine.exe'),
     ]
@@ -165,7 +174,7 @@ def build_regular():
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
-    app_title = props.get("TITLE", "ESDEngine")
+    app_title = props.get("TITLE", "EDKEngine")
     safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
 
     print("\n -> Copying executable...")
@@ -174,7 +183,7 @@ def build_regular():
 
     # Optional: copy resources like UI, Server, Config for local testing from this Regular directory
     try:
-        shutil.copytree("ui", os.path.join(dist_dir, "ui"))
+        shutil.copytree(os.path.join(".edk", "desktop", "ui"), os.path.join(dist_dir, "ui"))
         shutil.copytree("server", os.path.join(dist_dir, "server"))
         if os.path.exists("properties.config"):
             shutil.copy("properties.config", dist_dir)
@@ -267,7 +276,7 @@ def build_standalone():
     os.makedirs(dist_dir)
 
     props = parse_properties_config()
-    app_title = props.get("TITLE", "ESDEngine")
+    app_title = props.get("TITLE", "EDKEngine")
     safe_exe_name = "".join(c for c in app_title if c.isalnum() or c in " _-") + ".exe"
 
     print("\n -> Copying executable...")
@@ -356,7 +365,7 @@ def install_inno_setup_if_needed():
 
 def parse_properties_config():
     props = {
-        "TITLE": "ESD Suite Application",
+        "TITLE": "EDK Application",
         "VERSION": "1.0.0",
         "AUTHOR": "Ecxo Softwares"
     }
@@ -406,7 +415,7 @@ def build_installer():
     print("This will create a Standalone build and generate a setup installer script.")
     
     props = parse_properties_config()
-    app_title = props.get("TITLE", "ESD Suite Application")
+    app_title = props.get("TITLE", "EDK Application")
     app_version = props.get("VERSION", "1.0.0")
     app_publisher = props.get("AUTHOR", "Ecxo Softwares")
     safe_name = "".join(c for c in app_title if c.isalnum())
@@ -665,53 +674,20 @@ def _build_web_zip(pages_dir, dist_dir, safe_name, do_obfuscate):
     print(f"\n[Success] ZIP archive: {os.path.abspath(out_path)}")
 
 def build_web():
-    print_header("WEB PUBLISH BUILD")
-    print("Packages the ui/pages folder for web publishing.")
-
-    pages_dir = os.path.join("ui", "pages")
-    if not os.path.exists(pages_dir):
-        print(f"[Error] Pages folder not found: {os.path.abspath(pages_dir)}")
-        return
-
-    html_files = sorted(f for f in os.listdir(pages_dir) if f.lower().endswith('.html'))
-    if not html_files:
-        print("[Error] No HTML files found in ui/pages/")
-        return
-
-    print(f"\n -> Found {len(html_files)} page(s): {', '.join(html_files)}")
-
+    print_header("EDK WEB PUBLISH")
+    print("Compiles ui/ into a browser-ready site in dist/Web.")
     while True:
-        print("\nSelect web output format:")
-        print(" 1. Single HTML file  (all pages combined into one .html)")
-        print(" 2. Structured ZIP    (pages folder packaged as a .zip archive)")
-        fmt = input("Choose format (1/2): ").strip()
-        if fmt in ('1', '2'):
-            break
-        print("Invalid choice. Please enter 1 or 2.")
-
-    while True:
-        obf = input("\nObfuscate / minify the output? (y/n): ").strip().lower()
+        obf = input("\nOptimize CSS and JavaScript for publishing? (Y/n): ").strip().lower()
+        if not obf:
+            obf = "y"
         if obf in ('y', 'n', 'yes', 'no'):
             break
         print("Please enter 'y' or 'n'.")
-    do_obfuscate = obf.startswith('y')
-
-    props = parse_properties_config()
-    app_title = props.get("TITLE", "ESD Suite Application")
-    safe_name = "".join(c for c in app_title if c.isalnum() or c in " _-").strip()
-
-    dist_dir = os.path.join("dist", "Web")
-    _remove_distribution_tree(dist_dir)
-    os.makedirs(dist_dir)
-
-    if fmt == '1':
-        _build_web_single_html(pages_dir, html_files, dist_dir, safe_name, do_obfuscate)
-    else:
-        _build_web_zip(pages_dir, dist_dir, safe_name, do_obfuscate)
+    publish_web(optimize=obf.startswith('y'))
 
 def main():
     while True:
-        print_header("ESD Suite - Distribution Build Manager")
+        print_header("EDK Distribution Build Manager")
         print(" 1. Installer         (Creates a Standalone app + generated Setup.exe script)")
         print(" 2. Sandbox/Standalone(Builds a portable folder with embedded Python - No setup required)")
         print(" 3. Regular           (Natively builds .exe - Local Dev Testing ONLY)")

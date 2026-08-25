@@ -77,11 +77,12 @@ def _content_chunks(content, max_bytes=MAX_LITERAL_BYTES):
     return chunks
 
 
-def embed_html(output_path):
+def embed_html(output_path, ui_root="ui"):
     seen, unique_files = set(), []
-    for pattern in ["ui/**/*.html", "ui/*.html"]:
+    ui_root = os.path.abspath(ui_root)
+    for pattern in [os.path.join(ui_root, "**", "*.html"), os.path.join(ui_root, "*.html")]:
         for filepath in glob.glob(pattern, recursive=True):
-            key = filepath.replace("\\", "/")
+            key = "ui/" + os.path.relpath(filepath, ui_root).replace("\\", "/")
             if key not in seen:
                 seen.add(key)
                 unique_files.append((key, filepath))
@@ -119,4 +120,7 @@ def embed_html(output_path):
 
 
 if __name__ == "__main__":
-    embed_html(sys.argv[1] if len(sys.argv) > 1 else "engine/embedded_html.h")
+    embed_html(
+        sys.argv[1] if len(sys.argv) > 1 else "engine/embedded_html.h",
+        sys.argv[2] if len(sys.argv) > 2 else "ui",
+    )
