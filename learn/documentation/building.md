@@ -40,3 +40,13 @@ Standalone and installer builds embed local CSS, JavaScript, images, and HTML pa
 The command installs Docker Desktop when needed, starts it quietly, builds a clean container, installs `requirements.txt`, imports the backend, and runs tests from `tests/` when present.
 
 Docker tests the Python application in isolation. The Windows WebView app itself still runs on Windows.
+
+## Control refreshing
+
+Set this in `properties.config`:
+
+```config
+CAN_REFRESH=true
+```
+
+Use `true` to allow F5, Ctrl+R, and context-menu refreshing. EDK refreshes through `MAIN_PAGE`, so client-side routes no longer produce a 404 page. Use `false` to disable keyboard and context-menu refresh actions.

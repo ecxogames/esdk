@@ -10,7 +10,7 @@ REPO_API_URL = "https://api.github.com/repos/ecxogames/esd-suite/releases/latest
 
 # Define what parts of the project are the "Framework" (safe to overwrite)
 # vs "User Space" (ui/, server/, private/, public/, properties.config)
-FRAMEWORK_DIRS = ["engine", "scripts", "documentation"]
+FRAMEWORK_DIRS = ["engine", "scripts", "learn"]
 FRAMEWORK_FILES = ["CMakeLists.txt"]
 
 def print_header(title):

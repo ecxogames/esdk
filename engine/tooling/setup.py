@@ -36,7 +36,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TARGET_DIR = os.path.join(BASE_DIR, "engine")
 TARGET_PATH = os.path.join(TARGET_DIR, "webview.h")
 WEBVIEW2_DIR = os.path.join(TARGET_DIR, "webview2")
-BUILD_DIR = os.path.join(BASE_DIR, "build")
+BUILD_DIR = os.path.join(BASE_DIR, ".edk", "build")
 DOCKERFILE_PATH = os.path.join(BASE_DIR, "Dockerfile.edk")
 DOCKERIGNORE_PATH = os.path.join(BASE_DIR, ".dockerignore")
 
@@ -317,7 +317,7 @@ def configure_cmake():
     print("\n[*] Configuring CMake...")
     os.makedirs(BUILD_DIR, exist_ok=True)
     try:
-        subprocess.run(["cmake", ".."], cwd=BUILD_DIR, check=True)
+        subprocess.run(["cmake", "-S", BASE_DIR, "-B", BUILD_DIR], check=True)
         print("[+] CMake configuration completed successfully.")
     except subprocess.CalledProcessError as e:
         print(f"[-] Error during CMake configuration: {e}")
@@ -327,7 +327,7 @@ def configure_cmake():
         install_cmake()
         print("\n[*] Retrying CMake configuration...")
         try:
-            subprocess.run(["cmake", ".."], cwd=BUILD_DIR, check=True)
+            subprocess.run(["cmake", "-S", BASE_DIR, "-B", BUILD_DIR], check=True)
             print("[+] CMake configuration completed successfully.")
         except Exception as e:
             print(f"[-] Error running CMake after installation. Note: You might need to restart your terminal to refresh the system PATH.")
@@ -338,7 +338,7 @@ def print_instructions():
     print(" Setup Complete! Here are your next steps:")
     print("="*55)
     print("\n1. Build the project:")
-    print("   cd build")
+    print(r"   cd .edk\build")
     print("   cmake --build .")
     print("\n2. Run the application:")
     if os.name == 'nt': # Windows

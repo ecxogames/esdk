@@ -4,6 +4,11 @@ import time
 import subprocess
 import sys
 import shutil
+import threading
+import webbrowser
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 try:
@@ -21,8 +26,10 @@ try:
 except ImportError:
     from frontend import compile_frontend
 
-WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'requirements.txt', 'CMakeLists.txt']
-BUILD_DIR = 'build'
+WATCH_PATHS = ['engine', 'server', 'ui', 'properties.config', 'requirements.txt', 'package.json', 'CMakeLists.txt']
+BUILD_DIR = os.path.join('.edk', 'build')
+WEB_DEV_DIR = os.path.join('.edk', 'web-dev')
+WEB_REVISION = {'value': 0}
 
 def get_server_port():
     try:
@@ -38,13 +45,13 @@ def get_server_port():
 
 def get_exe_path():
     bases = [
-        os.path.join('build', 'Debug', 'EDKEngine.exe'),
-        os.path.join('build', 'Release', 'EDKEngine.exe'),
-        os.path.join('build', 'EDKEngine.exe'),
-        os.path.join('build', 'Debug', 'ESDEngine.exe'),
-        os.path.join('build', 'Release', 'ESDEngine.exe'),
-        os.path.join('build', 'ESDEngine.exe'),
-        os.path.join('build', 'ESDEngine')
+        os.path.join(BUILD_DIR, 'Debug', 'EDKEngine.exe'),
+        os.path.join(BUILD_DIR, 'Release', 'EDKEngine.exe'),
+        os.path.join(BUILD_DIR, 'EDKEngine.exe'),
+        os.path.join(BUILD_DIR, 'Debug', 'ESDEngine.exe'),
+        os.path.join(BUILD_DIR, 'Release', 'ESDEngine.exe'),
+        os.path.join(BUILD_DIR, 'ESDEngine.exe'),
+        os.path.join(BUILD_DIR, 'ESDEngine')
     ]
     for b in bases:
         if os.path.exists(b):
@@ -278,5 +285,172 @@ def main():
 
     return 0
 
+def get_main_page():
+    try:
+        with open('properties.config', 'r', encoding='utf-8') as config:
+            for line in config:
+                if line.strip().startswith('MAIN_PAGE='):
+                    value = line.split('=', 1)[1].strip().replace('\\', '/').lstrip('/')
+                    if value:
+                        return value
+    except OSError:
+        pass
+    return 'ui/pages/index.html'
+
+
+def install_live_reload():
+    script = """<script>
+(() => {
+  let revision;
+  setInterval(async () => {
+    try {
+      const next = await fetch('/__edk_revision', {cache: 'no-store'}).then(r => r.text());
+      if (revision !== undefined && next !== revision) location.reload();
+      revision = next;
+    } catch (_) {}
+  }, 500);
+})();
+</script>"""
+    for html_file in Path(WEB_DEV_DIR).rglob('*.html'):
+        document = html_file.read_text(encoding='utf-8')
+        if '/__edk_revision' not in document:
+            marker = '</body>'
+            document = document.replace(marker, script + marker) if marker in document else document + script
+            html_file.write_text(document, encoding='utf-8')
+
+
+def compile_web_test():
+    try:
+        compile_frontend('web', optimize=False, output=Path(WEB_DEV_DIR), quiet=True)
+        install_live_reload()
+        WEB_REVISION['value'] += 1
+        return True
+    except Exception as error:
+        print(f"[Dev] Web build failed: {error}")
+        return False
+
+
+class WebDevHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=os.path.abspath(WEB_DEV_DIR), **kwargs)
+
+    def log_message(self, _format, *_args):
+        pass
+
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        super().end_headers()
+
+    def do_GET(self):
+        requested_url = urlsplit(self.path)
+        if requested_url.path == '/__edk_revision':
+            payload = str(WEB_REVISION['value']).encode('ascii')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        requested = os.path.join(
+            os.path.abspath(WEB_DEV_DIR),
+            unquote(requested_url.path).lstrip('/').replace('/', os.sep)
+        )
+        accepts_html = 'text/html' in self.headers.get('Accept', '')
+        if requested_url.path == '/' or (accepts_html and (
+            not os.path.exists(requested) or os.path.isdir(requested)
+        )):
+            self.path = '/' + get_main_page()
+        super().do_GET()
+
+
+def start_web_server():
+    preferred_port = get_server_port()
+    try:
+        server = ThreadingHTTPServer(('127.0.0.1', preferred_port), WebDevHandler)
+    except OSError:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), WebDevHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+def run_web_test():
+    if not compile_web_test():
+        return 1
+
+    server = start_web_server()
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}/{get_main_page()}"
+    print(f"\n[Dev] Web test: {url}")
+    print(f"[Dev] Watching: {', '.join(WATCH_PATHS)}")
+    webbrowser.open(url)
+    last_mtime = get_latest_mtime()
+
+    try:
+        while True:
+            time.sleep(1)
+            current_mtime = get_latest_mtime()
+            if current_mtime > last_mtime:
+                print("\n[Dev] Changes detected - rebuilding the web view...")
+                compile_web_test()
+                last_mtime = get_latest_mtime()
+    except KeyboardInterrupt:
+        print("\n[Dev] Shutting down web test.")
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
+def run_desktop_test():
+    print(f"\n[Dev] Watching: {', '.join(WATCH_PATHS)}")
+    fresh = get_exe_path() is None
+    if fresh and not validate_with_docker_if_configured():
+        print("[Dev] Docker validation failed; the desktop build was cancelled.")
+        return 1
+
+    app_process = start_app(fresh=fresh)
+    last_mtime = get_latest_mtime()
+
+    try:
+        while True:
+            time.sleep(1)
+            current_mtime = get_latest_mtime()
+            if current_mtime > last_mtime:
+                print("\n[Dev] File changes detected - rebuilding desktop app...")
+                if app_process and app_process.poll() is None:
+                    app_process.terminate()
+                    app_process.wait()
+                app_process = start_app(fresh=False)
+                last_mtime = get_latest_mtime()
+    except KeyboardInterrupt:
+        print("\n[Dev] Shutting down desktop test.")
+        if app_process and app_process.poll() is None:
+            app_process.terminate()
+            app_process.wait()
+    return 0
+
+
+def ask_test_target():
+    print("\n" + "=" * 50)
+    print("  EDK Development")
+    print("=" * 50)
+    print("\n  [1] Web test     - opens the app in your default browser")
+    print("  [2] Desktop test - builds and opens the native desktop app")
+    print()
+    while True:
+        choice = input("Select (1/2): ").strip()
+        if choice in ('1', '2'):
+            return choice
+        print("  Please enter 1 or 2.")
+
+
+def development_main():
+    choice = ask_test_target()
+    return run_web_test() if choice == '1' else run_desktop_test()
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(development_main())

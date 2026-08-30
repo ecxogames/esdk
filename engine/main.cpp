@@ -272,8 +272,11 @@ std::string GetCurrentWorkingDir() {
     GetCurrentDir(buff, FILENAME_MAX);
     std::string cwd(buff);
     
-    // If run from within the build directory, strip it to reach the project root.
-    size_t buildPos = cwd.find("\\build");
+    // If run from within .edk/build, strip the entire framework state path to
+    // reach the project root. Keep the legacy fallback for old binaries.
+    size_t buildPos = cwd.find("\\.edk\\build");
+    if (buildPos == std::string::npos) buildPos = cwd.find("/.edk/build");
+    if (buildPos == std::string::npos) buildPos = cwd.find("\\build");
     if (buildPos == std::string::npos) buildPos = cwd.find("/build");
     if (buildPos != std::string::npos) {
         cwd = cwd.substr(0, buildPos);
@@ -281,10 +284,47 @@ std::string GetCurrentWorkingDir() {
     return cwd;
 }
 
+static std::string ReadRuntimeTextFile(const std::string& filename) {
+    std::ifstream diskFile(filename, std::ios::binary);
+    if (diskFile.is_open()) {
+        std::ostringstream contents;
+        contents << diskFile.rdbuf();
+        return contents.str();
+    }
+    if (!Py_IsInitialized()) return "";
+
+    std::string key = filename;
+    for (char& c : key) if (c == '\\') c = '/';
+    for (const std::string marker : {"/ui/", "/server/", "/public/", "/private/", "/generated/"}) {
+        size_t position = key.rfind(marker);
+        if (position != std::string::npos) {
+            key = key.substr(position + 1);
+            break;
+        }
+    }
+
+    std::string result;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject* mainModule = PyImport_AddModule("__main__");
+    PyObject* files = mainModule ? PyObject_GetAttrString(mainModule, "_edk_pak_files") : nullptr;
+    if (files && PyDict_Check(files)) {
+        PyObject* value = PyDict_GetItemString(files, key.c_str());
+        if (value && PyBytes_Check(value)) {
+            char* data = nullptr;
+            Py_ssize_t size = 0;
+            if (PyBytes_AsStringAndSize(value, &data, &size) == 0 && data)
+                result.assign(data, static_cast<size_t>(size));
+        }
+    }
+    Py_XDECREF(files);
+    PyGILState_Release(gil);
+    return result;
+}
+
 // Helper to load properties.config
 std::unordered_map<std::string, std::string> LoadConfig(const std::string& filename) {
     std::unordered_map<std::string, std::string> config;
-    std::ifstream file(filename);
+    std::istringstream file(ReadRuntimeTextFile(filename));
     std::string line;
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -385,6 +425,10 @@ struct NativeWindowState {
     WNDPROC originalProc = nullptr;
     int cornerRadius = 0;
     bool frameless = false;
+    bool resizeable = true;
+    bool fullscreen = false;
+    LONG_PTR windowedStyle = 0;
+    WINDOWPLACEMENT windowedPlacement{sizeof(WINDOWPLACEMENT)};
 };
 
 static NativeWindowState g_nativeWindowState;
@@ -423,10 +467,32 @@ static LRESULT CALLBACK EsdkWindowProc(HWND hwnd, UINT message, WPARAM wParam, L
         if (message == WM_NCCALCSIZE && wParam) return 0;
         if (message == WM_NCPAINT) return 0;
         if (message == WM_NCACTIVATE) return TRUE;
+        if (message == WM_GETMINMAXINFO && !g_nativeWindowState.fullscreen) {
+            auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+            HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            if (GetMonitorInfo(monitor, &info)) {
+                limits->ptMaxPosition.x = info.rcWork.left - info.rcMonitor.left;
+                limits->ptMaxPosition.y = info.rcWork.top - info.rcMonitor.top;
+                limits->ptMaxSize.x = info.rcWork.right - info.rcWork.left;
+                limits->ptMaxSize.y = info.rcWork.bottom - info.rcWork.top;
+                limits->ptMaxTrackSize = limits->ptMaxSize;
+                return 0;
+            }
+        }
     }
 
     WNDPROC original = g_nativeWindowState.originalProc;
     LRESULT result = CallWindowProc(original, hwnd, message, wParam, lParam);
+
+    if (message == WM_NCHITTEST && !g_nativeWindowState.resizeable &&
+        !g_nativeWindowState.fullscreen) {
+        switch (result) {
+            case HTLEFT: case HTRIGHT: case HTTOP: case HTBOTTOM:
+            case HTTOPLEFT: case HTTOPRIGHT: case HTBOTTOMLEFT: case HTBOTTOMRIGHT:
+                return HTCLIENT;
+        }
+    }
 
     if (message == WM_SIZE && g_nativeWindowState.frameless) {
         if (wParam == SIZE_MAXIMIZED) {
@@ -497,6 +563,7 @@ void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_
     bool canClose = (config.count("CAN_CLOSE") == 0 || config.at("CAN_CLOSE") != "false");
     bool canMinimize = (config.count("CAN_MINIMIZE") == 0 || config.at("CAN_MINIMIZE") != "false");
     bool canMaximize = (config.count("CAN_MAXIMIZE") == 0 || config.at("CAN_MAXIMIZE") != "false");
+    bool resizeable = (config.count("RESIZEABLE") == 0 || config.at("RESIZEABLE") != "false");
     bool showTitlebar = (config.count("TITLEBAR") == 0 || config.at("TITLEBAR") != "false");
     
     int cornerRadius = 0;
@@ -522,15 +589,18 @@ void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_
         // Keep the native sizing frame when maximizing is allowed. It is
         // visually frameless without WS_CAPTION, but Windows retains correct
         // maximize, restore, snap, work-area, and minimum-size behavior.
-        if (canMaximize) style |= WS_THICKFRAME;
+        if (canMaximize || resizeable) style |= WS_THICKFRAME;
         else style &= ~WS_THICKFRAME;
     } else {
-        style |= (WS_CAPTION | WS_THICKFRAME);
+        style |= WS_CAPTION;
+        if (canMaximize || resizeable) style |= WS_THICKFRAME;
+        else style &= ~WS_THICKFRAME;
     }
     SetWindowLongPtr(hwnd, GWL_STYLE, style);
 
     g_nativeWindowState.frameless = !showTitlebar;
     g_nativeWindowState.cornerRadius = cornerRadius;
+    g_nativeWindowState.resizeable = resizeable;
     SuppressFramelessDwmBorder(hwnd);
     
     // Center the window on the screen and force it to redraw its frame
@@ -563,19 +633,40 @@ void ApplyWindowProperties(webview::webview& w, HWND hwnd, const std::unordered_
 }
 
 #ifdef _WIN32
-// Switches the window to borderless fullscreen covering the entire primary monitor.
-void ApplyFullscreen(webview::webview& w, HWND hwnd) {
+// Fullscreen is explicit and separate from ordinary Windows maximize.
+void SetFullscreen(webview::webview& w, HWND hwnd, bool enabled) {
     if (!hwnd) return;
-    int screenWidth  = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    // WS_VISIBLE must be kept — dropping it hides the native window while leaving
-    // the WebView2 child surfaces visible, producing the staircase-white artifact.
-    SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    // Clear any rounded-corner clipping region before covering the full screen.
-    SetWindowRgn(hwnd, NULL, FALSE);
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, screenWidth, screenHeight,
-                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
-    w.set_size(screenWidth, screenHeight, WEBVIEW_HINT_FIXED);
+    if (enabled == g_nativeWindowState.fullscreen) return;
+
+    if (enabled) {
+        g_nativeWindowState.windowedStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
+        g_nativeWindowState.windowedPlacement.length = sizeof(WINDOWPLACEMENT);
+        GetWindowPlacement(hwnd, &g_nativeWindowState.windowedPlacement);
+        g_nativeWindowState.fullscreen = true;
+
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO info{sizeof(info)};
+        if (!GetMonitorInfo(monitor, &info)) return;
+        SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowRgn(hwnd, nullptr, FALSE);
+        SetWindowPos(hwnd, HWND_TOP,
+                     info.rcMonitor.left, info.rcMonitor.top,
+                     info.rcMonitor.right - info.rcMonitor.left,
+                     info.rcMonitor.bottom - info.rcMonitor.top,
+                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    } else {
+        g_nativeWindowState.fullscreen = false;
+        SetWindowLongPtr(hwnd, GWL_STYLE, g_nativeWindowState.windowedStyle);
+        SetWindowPlacement(hwnd, &g_nativeWindowState.windowedPlacement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        UpdateRoundedWindowRegion(hwnd, IsZoomed(hwnd) != FALSE);
+    }
+}
+
+void ToggleFullscreen(webview::webview& w, HWND hwnd) {
+    SetFullscreen(w, hwnd, !g_nativeWindowState.fullscreen);
 }
 #endif
 
@@ -583,6 +674,7 @@ int main() {
     std::string cwd = GetCurrentWorkingDir();
     auto rootConfig = LoadConfig(cwd + "/properties.config");
     bool isFullscreen = (rootConfig.count("FULLSCREEN") && rootConfig.at("FULLSCREEN") == "true");
+    bool canMaximize = (rootConfig.count("CAN_MAXIMIZE") == 0 || rootConfig.at("CAN_MAXIMIZE") != "false");
     int appPort = 2024;
     if (rootConfig.count("APP_PORT")) {
         try {
@@ -611,6 +703,7 @@ int main() {
     // Determine the main page
     std::string mainPageFile = rootConfig.count("MAIN_PAGE") ? rootConfig["MAIN_PAGE"] : "ui/pages/index.html";
     std::string titlebarColor = rootConfig.count("TITLEBAR_COLOR") ? rootConfig["TITLEBAR_COLOR"] : "";
+    bool canRefresh = !rootConfig.count("CAN_REFRESH") || rootConfig.at("CAN_REFRESH") != "false";
 
     // Replace backslashes with forward slashes for URI formatting
     std::string cwdUri = cwd;
@@ -642,10 +735,53 @@ int main() {
     // instead of navigating to an unrelated or stale process.
     {
         std::string serverScript =
-            "import threading, http.server, socket, time\n"
+            "import threading, http.server, socket, time, os, io, zipfile, mimetypes, importlib.abc, importlib.util, urllib.parse\n"
+            "_edk_pak_files = {}\n"
+            "_edk_pak_path = os.path.join('" + pyCwd + "', 'app.pak')\n"
+            "if os.path.isfile(_edk_pak_path):\n"
+            "    with open(_edk_pak_path, 'rb') as _pak_stream:\n"
+            "        _edk_pak_bytes = _pak_stream.read()\n"
+            "    with zipfile.ZipFile(io.BytesIO(_edk_pak_bytes), 'r') as _pak:\n"
+            "        _edk_pak_files = {n.replace('\\\\\\\\', '/').lstrip('/'): _pak.read(n) for n in _pak.namelist() if not n.endswith('/')}\n"
+            "    class _EdkPakImporter(importlib.abc.MetaPathFinder, importlib.abc.Loader):\n"
+            "        def _entry(self, fullname):\n"
+            "            base = fullname.replace('.', '/')\n"
+            "            if base + '/__init__.py' in _edk_pak_files: return base + '/__init__.py', True\n"
+            "            if base + '.py' in _edk_pak_files: return base + '.py', False\n"
+            "            return None, False\n"
+            "        def find_spec(self, fullname, path=None, target=None):\n"
+            "            entry, package = self._entry(fullname)\n"
+            "            return importlib.util.spec_from_loader(fullname, self, is_package=package) if entry else None\n"
+            "        def create_module(self, spec): return None\n"
+            "        def exec_module(self, module):\n"
+            "            entry, package = self._entry(module.__name__)\n"
+            "            module.__file__ = 'app.pak/' + entry\n"
+            "            if package: module.__path__ = ['app.pak/' + entry.rsplit('/', 1)[0]]\n"
+            "            exec(compile(_edk_pak_files[entry], module.__file__, 'exec'), module.__dict__)\n"
+            "    sys.meta_path.insert(0, _EdkPakImporter())\n"
             "class _ESDHandler(http.server.SimpleHTTPRequestHandler):\n"
             "    def __init__(self, *a, **kw):\n"
             "        super().__init__(*a, directory='" + pyWebRoot + "', **kw)\n"
+            "    def do_GET(self):\n"
+            "        if _edk_pak_files:\n"
+            "            key = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path).lstrip('/')\n"
+            "            accepts_html = 'text/html' in self.headers.get('Accept', '')\n"
+            "            if not key or key.endswith('/') or (key not in _edk_pak_files and accepts_html):\n"
+            "                key = '" + mainPageFile + "'\n"
+            "            data = _edk_pak_files.get(key)\n"
+            "            if data is None:\n"
+            "                self.send_error(404, 'File not found'); return\n"
+            "            content_type = mimetypes.guess_type(key)[0] or 'application/octet-stream'\n"
+            "            self.send_response(200)\n"
+            "            self.send_header('Content-Type', content_type)\n"
+            "            self.send_header('Content-Length', str(len(data)))\n"
+            "            self.end_headers()\n"
+            "            self.wfile.write(data); return\n"
+            "        requested = self.translate_path(self.path)\n"
+            "        accepts_html = 'text/html' in self.headers.get('Accept', '')\n"
+            "        if accepts_html and (not os.path.exists(requested) or os.path.isdir(requested)):\n"
+            "            self.path = '/" + mainPageFile + "'\n"
+            "        return super().do_GET()\n"
             "    def end_headers(self):\n"
             "        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')\n"
             "        self.send_header('Pragma', 'no-cache')\n"
@@ -659,7 +795,8 @@ int main() {
             "    _esd_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _ESDHandler)\n"
             "_esd_server.daemon_threads = True\n"
             "_esd_actual_port = int(_esd_server.server_address[1])\n"
-            "threading.Thread(target=_esd_server.serve_forever, daemon=True).start()\n"
+            "_esd_server_thread = threading.Thread(target=_esd_server.serve_forever, daemon=True)\n"
+            "_esd_server_thread.start()\n"
             "# Block until this process's server is accepting connections (max ~5 s)\n"
             "for _ in range(50):\n"
             "    try:\n"
@@ -702,6 +839,22 @@ int main() {
     
     if (!contextMenu) {
         w.init("window.addEventListener('contextmenu', e => e.preventDefault());");
+    }
+
+    if (!canRefresh) {
+        w.init(R"EDKNOREFRESH(
+            window.addEventListener('keydown', function (event) {
+                const key = String(event.key || '').toLowerCase();
+                if (key === 'f5' || ((event.ctrlKey || event.metaKey) && key === 'r')) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                }
+            }, true);
+            window.addEventListener('contextmenu', function (event) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+            }, true);
+        )EDKNOREFRESH");
     }
 
     HWND hwnd = nullptr;
@@ -772,7 +925,7 @@ int main() {
         w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile);
 #endif
 #ifdef _WIN32
-        if (isFullscreen) ApplyFullscreen(w, hwnd);
+        if (isFullscreen) SetFullscreen(w, hwnd, true);
 #endif
         return "";
     });
@@ -797,7 +950,7 @@ int main() {
         w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr)));
 #endif
 #ifdef _WIN32
-        if (isFullscreen) ApplyFullscreen(w, hwnd);
+        if (isFullscreen) SetFullscreen(w, hwnd, true);
 #endif
     }
 
@@ -851,12 +1004,54 @@ int main() {
 
     w.bind("windowMaximize", [&](std::string req) -> std::string {
 #ifdef _WIN32
-        if (hwnd) {
+        if (hwnd && canMaximize && !g_nativeWindowState.fullscreen) {
             ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
         }
 #endif
         return "";
     });
+
+
+    w.bind("windowFullscreen", [&](std::string req) -> std::string {
+#ifdef _WIN32
+        if (hwnd) ToggleFullscreen(w, hwnd);
+#endif
+        return "";
+    });
+    w.init(R"EDKFULLSCREEN(
+        window.addEventListener('keydown', function (event) {
+            if (String(event.key || '').toLowerCase() === 'f11') {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (window.windowFullscreen) window.windowFullscreen();
+            }
+        }, true);
+    )EDKFULLSCREEN");
+
+    // Refresh through the configured entry page instead of the current SPA
+    // route, which may not correspond to a physical file on disk.
+    if (canRefresh) {
+        w.bind("refreshApp", [&](std::string) -> std::string {
+#ifdef ESD_EMBED_HTML
+            std::string mainHtml = GetPageHtml(mainPageFile);
+            if (!mainHtml.empty()) w.set_html(mainHtml);
+            else w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile);
+#else
+            w.navigate("http://127.0.0.1:" + appPortString + "/" + mainPageFile + "?v=" + std::to_string(std::time(nullptr)));
+#endif
+            return "";
+        });
+        w.init(R"EDKREFRESH(
+            window.addEventListener('keydown', function (event) {
+                const key = String(event.key || '').toLowerCase();
+                if (key === 'f5' || ((event.ctrlKey || event.metaKey) && key === 'r')) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    if (window.refreshApp) window.refreshApp();
+                }
+            }, true);
+        )EDKREFRESH");
+    }
 
     // Native Drag window binding for UI
     w.bind("dragWindow", [&](std::string req) -> std::string {
@@ -927,14 +1122,11 @@ int main() {
             modalName = modalName.substr(2, modalName.size() - 4);
 
         std::string modalPath = cwd + "/ui/modals/" + modalName + ".html";
-        std::ifstream mf(modalPath);
-        if (!mf.is_open()) {
+        std::string src = ReadRuntimeTextFile(modalPath);
+        if (src.empty()) {
             w.eval("window.__esd_resolveModal(null)");
             return "";
         }
-        std::stringstream mss;
-        mss << mf.rdbuf();
-        std::string src = mss.str();
 
         // ── Parse <modal> attributes ────────────────────────────────────────
         std::string modalTag = ModalOpenTag(src, "modal");
@@ -1091,7 +1283,15 @@ int main() {
     w.run();
     PyEval_RestoreThread(_pyThreadState);
 
-    // 5. Cleanup
+    // 5. Cleanup. Stop and join the embedded HTTP server before finalizing
+    // Python so the process exits completely and can be launched again.
+    PyRun_SimpleString(
+        "if '_esd_server' in globals():\n"
+        "    _esd_server.shutdown()\n"
+        "    _esd_server.server_close()\n"
+        "if '_esd_server_thread' in globals():\n"
+        "    _esd_server_thread.join(timeout=5)\n"
+    );
     Py_Finalize();
     return 0;
 }

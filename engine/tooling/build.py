@@ -10,6 +10,8 @@ import zipfile
 import subprocess
 from datetime import datetime
 
+BUILD_DIR = os.path.join(".edk", "build")
+
 try:
     from engine.tooling.frontend import compile_frontend, publish_web
 except ImportError:
@@ -127,31 +129,31 @@ def run_cmake_build(embed_html=False):
     compiled_frontend = compile_frontend("desktop", optimize=embed_html, quiet=True)
 
     # Force CMake to re-evaluate whether icon.rc exists by removing the cache.
-    cache_file = os.path.join("build", "CMakeCache.txt")
+    cache_file = os.path.join(BUILD_DIR, "CMakeCache.txt")
     if os.path.exists(cache_file):
         try:
             os.remove(cache_file)
         except OSError:
             pass
 
-    cmake_configure = ["cmake", "-B", "build"]
+    cmake_configure = ["cmake", "-B", BUILD_DIR]
+    python_version = resolved_python_version()
+    build_python = _find_build_python(python_version)
+    cmake_configure.append("-DPython3_EXECUTABLE=" + build_python.replace("\\", "/"))
     if embed_html:
-        python_version = resolved_python_version()
-        build_python = _find_build_python(python_version)
-        cmake_configure.append("-DPython3_EXECUTABLE=" + build_python.replace("\\", "/"))
         cmake_configure.append("-DESD_EMBED_HTML=ON")
         cmake_configure.append("-DEDK_UI_ROOT=" + str(compiled_frontend / "ui").replace("\\", "/"))
         print("[Info] HTML embedding enabled — UI pages will be baked into the binary.")
 
     subprocess.run(cmake_configure, check=True)
-    subprocess.run(["cmake", "--build", "build", "--config", "Release"], check=True)
+    subprocess.run(["cmake", "--build", BUILD_DIR, "--config", "Release"], check=True)
 
 def find_exe():
     bases = [
-        os.path.join('build', 'Release', 'EDKEngine.exe'),
-        os.path.join('build', 'EDKEngine.exe'),
-        os.path.join('build', 'Release', 'ESDEngine.exe'),
-        os.path.join('build', 'ESDEngine.exe'),
+        os.path.join(BUILD_DIR, 'Release', 'EDKEngine.exe'),
+        os.path.join(BUILD_DIR, 'EDKEngine.exe'),
+        os.path.join(BUILD_DIR, 'Release', 'ESDEngine.exe'),
+        os.path.join(BUILD_DIR, 'ESDEngine.exe'),
     ]
     for b in bases:
         if os.path.exists(b):
@@ -259,13 +261,35 @@ def _install_embedded_requirements(dist_dir, pip_lines):
             os.remove(pip_requirements)
 
 
+def _create_app_pak(dist_dir):
+    pak_path = os.path.join(dist_dir, "app.pak")
+    sources = [
+        (os.path.join(".edk", "desktop", "ui"), "ui"),
+        ("server", "server"),
+        ("public", "public"),
+        ("private", "private"),
+    ]
+    with zipfile.ZipFile(pak_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as pak:
+        for source_root, archive_root in sources:
+            if not os.path.isdir(source_root):
+                continue
+            for root, _, names in os.walk(source_root):
+                for name in names:
+                    source = os.path.join(root, name)
+                    relative = os.path.relpath(source, source_root).replace(os.sep, "/")
+                    pak.write(source, f"{archive_root}/{relative}")
+        if os.path.isfile("requirements.txt"):
+            pak.write("requirements.txt", "requirements.txt")
+    return pak_path
+
+
 def build_standalone():
     print_header("SANDBOX / SELF-SUSTAINED BUILD")
     print("Building a completely self-contained distribution folder (Standalone Sandbox)...")
     print("This will embed the official Python runtime alongside the app, increasing file size but making it 100% portable.")
 
-    # HTML pages are baked into the binary; the ui/ folder is intentionally excluded from dist.
-    run_cmake_build(embed_html=True)
+    # Production app sources live in app.pak and are loaded into RAM at startup.
+    run_cmake_build(embed_html=False)
     exe = find_exe()
     if not exe:
         print("[Error] Executable not found after build.")
@@ -282,16 +306,11 @@ def build_standalone():
     print("\n -> Copying executable...")
     shutil.copy(exe, os.path.join(dist_dir, safe_exe_name))
 
-    print(" -> Copying Server assets...")
-    shutil.copytree("server", os.path.join(dist_dir, "server"))
-    for module_dir in ("public", "private"):
-        if os.path.exists(module_dir):
-            shutil.copytree(module_dir, os.path.join(dist_dir, module_dir))
+    print(" -> Packing app UI and Python modules into app.pak...")
+    _create_app_pak(dist_dir)
 
     if os.path.exists("properties.config"):
         shutil.copy("properties.config", dist_dir)
-    if os.path.exists("requirements.txt"):
-        shutil.copy("requirements.txt", dist_dir)
 
     print(" -> Bundling Visual C++ Runtime libraries...")
     # Bundle MSVCP140.dll and VCRUNTIME to prevent "DLL not found" on fresh Windows

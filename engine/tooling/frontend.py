@@ -225,8 +225,8 @@ def compile_frontend(target="desktop", *, optimize=False, output: Path | None = 
         raise ValueError("target must be 'desktop' or 'web'")
     ensure_frontend_dependencies(quiet=quiet)
     destination = output or PROJECT_DIR / ".edk" / target
-    state_root = PROJECT_DIR / ".edk"
-    state_root.mkdir(exist_ok=True)
+    state_root = PROJECT_DIR / ".edk" / "temp"
+    state_root.mkdir(parents=True, exist_ok=True)
     staging_root = Path(tempfile.mkdtemp(prefix="frontend-", dir=state_root))
     ui_staging = staging_root / "ui"
     tailwind = _tailwind_enabled()

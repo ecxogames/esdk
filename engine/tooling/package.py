@@ -13,7 +13,7 @@ ITEMS_TO_PACKAGE = [
     "public",
     "private",
     "engine",
-    "documentation"
+    "learn"
 ]
 
 # Files to exclude from the packaged zip (relative paths, normalized)

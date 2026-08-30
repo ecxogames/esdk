@@ -1,5 +1,10 @@
 Here is a list of the changes made in this release:
 
+## Refresh And Relaunch Reliability
+- Added `CAN_REFRESH` to control F5, Ctrl+R, and context-menu refresh behavior.
+- Routed allowed refreshes through `MAIN_PAGE` and added an HTML navigation fallback for client-side routes.
+- Shut down and joined the embedded HTTP server before Python finalization so closed applications can reopen normally.
+
 ## EDK Unified Desktop and Web Package
 - Combined the EWDK frontend compiler with the desktop SDK and rebranded the package as EDK.
 - Made `ui/` the shared source folder for desktop applications and websites.

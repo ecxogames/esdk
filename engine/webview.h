@@ -1129,6 +1129,7 @@ using browser_engine = detail::cocoa_wkwebview_engine;
 #include <shlwapi.h>
 #include <stdlib.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include "WebView2.h"
 
@@ -1697,6 +1698,10 @@ static constexpr IID IID_ICoreWebView2PermissionRequestedEventHandler{
     0x15E1C6A3, 0xC72A, 0x4DF3, 0x91, 0xD7, 0xD0, 0x97, 0xFB, 0xEC, 0x6B, 0xFD};
 static constexpr IID IID_ICoreWebView2WebMessageReceivedEventHandler{
     0x57213F19, 0x00E6, 0x49FA, 0x8E, 0x07, 0x89, 0x8E, 0xA0, 0x1E, 0xCB, 0xD2};
+static constexpr IID IID_ICoreWebView2NewWindowRequestedEventHandler{
+    0xD4C185FE, 0xC81C, 0x4989, 0x97, 0xAF, 0x2D, 0x3F, 0xA7, 0xAB, 0x56, 0x51};
+static constexpr IID IID_ICoreWebView2NavigationStartingEventHandler{
+    0x9ADBE429, 0xF36D, 0x432B, 0x9D, 0xDC, 0xF8, 0x88, 0x1F, 0xBD, 0x76, 0xE3};
 
 #if WEBVIEW_MSWEBVIEW2_BUILTIN_IMPL == 1
 enum class webview2_runtime_type { installed = 0, embedded = 1 };
@@ -1945,6 +1950,14 @@ static constexpr auto message_received =
 static constexpr auto permission_requested =
     cast_info_t<ICoreWebView2PermissionRequestedEventHandler>{
         IID_ICoreWebView2PermissionRequestedEventHandler};
+
+static constexpr auto new_window_requested =
+    cast_info_t<ICoreWebView2NewWindowRequestedEventHandler>{
+        mswebview2::IID_ICoreWebView2NewWindowRequestedEventHandler};
+
+static constexpr auto navigation_starting =
+    cast_info_t<ICoreWebView2NavigationStartingEventHandler>{
+        mswebview2::IID_ICoreWebView2NavigationStartingEventHandler};
 } // namespace cast_info
 } // namespace mswebview2
 
@@ -1952,7 +1965,9 @@ class webview2_com_handler
     : public ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
       public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
       public ICoreWebView2WebMessageReceivedEventHandler,
-      public ICoreWebView2PermissionRequestedEventHandler {
+      public ICoreWebView2PermissionRequestedEventHandler,
+      public ICoreWebView2NewWindowRequestedEventHandler,
+      public ICoreWebView2NavigationStartingEventHandler {
   using webview2_com_handler_cb_t =
       std::function<void(ICoreWebView2Controller *, ICoreWebView2 *webview)>;
 
@@ -1994,7 +2009,9 @@ public:
     if (cast_if_equal_iid(riid, controller_completed, ppv) ||
         cast_if_equal_iid(riid, environment_completed, ppv) ||
         cast_if_equal_iid(riid, message_received, ppv) ||
-        cast_if_equal_iid(riid, permission_requested, ppv)) {
+        cast_if_equal_iid(riid, permission_requested, ppv) ||
+        cast_if_equal_iid(riid, new_window_requested, ppv) ||
+        cast_if_equal_iid(riid, navigation_starting, ppv)) {
       return S_OK;
     }
 
@@ -2030,6 +2047,8 @@ public:
     controller->get_CoreWebView2(&webview);
     webview->add_WebMessageReceived(this, &token);
     webview->add_PermissionRequested(this, &token);
+    webview->add_NewWindowRequested(this, &token);
+    webview->add_NavigationStarting(this, &token);
 
     m_cb(controller, webview);
     return S_OK;
@@ -2051,6 +2070,46 @@ public:
     args->get_PermissionKind(&kind);
     if (kind == COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ) {
       args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+    }
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 * /*sender*/,
+         ICoreWebView2NewWindowRequestedEventArgs *args) {
+    LPWSTR uri = nullptr;
+    if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+      const std::wstring target(uri);
+      const bool external =
+          target.rfind(L"http://", 0) == 0 ||
+          target.rfind(L"https://", 0) == 0 ||
+          target.rfind(L"mailto:", 0) == 0;
+      if (external) {
+        ShellExecuteW(nullptr, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        args->put_Handled(TRUE);
+      }
+      CoTaskMemFree(uri);
+    }
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 * /*sender*/,
+         ICoreWebView2NavigationStartingEventArgs *args) {
+    LPWSTR uri = nullptr;
+    if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+      const std::wstring target(uri);
+      const bool web_url =
+          target.rfind(L"http://", 0) == 0 ||
+          target.rfind(L"https://", 0) == 0;
+      const bool local_app =
+          target.rfind(L"http://127.0.0.1:", 0) == 0 ||
+          target.rfind(L"http://localhost:", 0) == 0;
+      if (web_url && !local_app) {
+        ShellExecuteW(nullptr, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        args->put_Cancel(TRUE);
+      }
+      CoTaskMemFree(uri);
     }
     return S_OK;
   }

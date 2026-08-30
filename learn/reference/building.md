@@ -42,3 +42,7 @@ Standalone and installer builds embed local CSS, JavaScript, images, and HTML pa
 The command installs Docker Desktop when needed, starts it quietly, builds a clean container, installs `requirements.txt`, imports the backend, and runs tests from `tests/` when present.
 
 Docker tests the Python application in isolation. The Windows WebView app itself still runs on Windows.
+
+## Control refreshing
+
+Set `CAN_REFRESH=true` in `properties.config` to allow F5, Ctrl+R, and context-menu refresh actions. Refreshing returns through `MAIN_PAGE`, including from client-side routes. Set it to `false` to disable those actions.

@@ -1,7 +1,5 @@
-/build
 /.edk
 /node_modules
-/.esdk
 /prompts
 /.vscode
 /dist
